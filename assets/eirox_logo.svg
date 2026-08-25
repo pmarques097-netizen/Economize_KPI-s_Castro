@@ -1,0 +1,18 @@
+<svg width="520" height="150" viewBox="0 0 520 150" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <linearGradient id="g1" x1="18" y1="16" x2="132" y2="132" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#35E7F4"/>
+    <stop offset="1" stop-color="#2879F5"/>
+  </linearGradient>
+  <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+    <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#0A5FC7" flood-opacity="0.35"/>
+  </filter>
+</defs>
+<g filter="url(#shadow)">
+  <rect x="10" y="12" width="126" height="126" rx="34" fill="url(#g1)"/>
+  <path d="M42 45H105V62H61V70H99V86H61V96H106V113H42V45Z" fill="white"/>
+  <path d="M92 44L113 44L126 65L113 86L93 86L106 65L92 44Z" fill="#08223A" fill-opacity="0.92"/>
+</g>
+<text x="158" y="88" fill="white" font-size="66" font-weight="800" font-family="Arial, Helvetica, sans-serif" letter-spacing="1">EIROX</text>
+<text x="161" y="118" fill="#72DDEC" font-size="20" font-weight="700" font-family="Arial, Helvetica, sans-serif" letter-spacing="4">INTELLIGENCE</text>
+</svg>

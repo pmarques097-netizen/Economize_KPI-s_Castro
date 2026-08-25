@@ -1,0 +1,18 @@
+[
+  {
+    "comprador": "Geane",
+    "usuario": "geane",
+    "senha_hash": "4bde493fa97093eed42501cb5b9eb61a3cb5453e6e06cda40a22ee23834446c3",
+    "ativo": true,
+    "criado_em": "24/08/2026 09:00:00",
+    "atualizado_em": "24/08/2026 09:00:00"
+  },
+  {
+    "comprador": "Renato",
+    "usuario": "renato",
+    "senha_hash": "1a4e9350cf6dc75287e7b452f561bb5c09380a111131f6895694cd3fd5ae156f",
+    "ativo": true,
+    "criado_em": "24/08/2026 09:00:00",
+    "atualizado_em": "24/08/2026 09:00:00"
+  }
+]

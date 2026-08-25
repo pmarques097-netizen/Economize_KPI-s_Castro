@@ -1,0 +1,15 @@
+[
+  {
+    "Comprador": "Geane",
+    "Status": "Ativo"
+  },
+  {
+    "Comprador": "Renato",
+    "Status": "Ativo"
+  },
+  {
+    "Comprador": "Sebastião",
+    "Status": "Inativo",
+    "Origem": "Histórico preservado"
+  }
+]

@@ -1,0 +1,21 @@
+REDE ECONOMIZE KPI — PACOTE STREAMLIT CLOUD
+
+1. Envie o CONTEÚDO desta pasta para a raiz de um repositório GitHub.
+2. No Streamlit Community Cloud, crie o app apontando para:
+   app.py
+3. Python recomendado: 3.12 ou 3.13.
+4. O requirements.txt já está preparado.
+5. O sistema abre usando os dados SQLite incluídos no pacote.
+
+BANCO POSTGRESQL ONLINE
+O banco configurado anteriormente usa endereço privado de rede (192.168.x.x).
+O Streamlit Cloud NÃO consegue acessar esse endereço diretamente.
+Para atualização online, o PostgreSQL precisa estar acessível ao Streamlit Cloud
+por host público seguro, VPN/túnel compatível ou outra infraestrutura acessível.
+
+Quando houver um host acessível, configure os dados em Settings > Secrets usando
+.streamlit/secrets.toml.example como modelo.
+
+SEGURANÇA
+O pacote não contém a senha do PostgreSQL em texto aberto.
+O arquivo RELACAO_USUARIOS_E_SENHAS.txt também não foi incluído no pacote de deploy.

@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.DS_Store
+Thumbs.db
+config/database.local.json
+.streamlit/secrets.toml
+data/backups_troca_banco/
+data/logs/

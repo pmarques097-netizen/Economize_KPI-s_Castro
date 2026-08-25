@@ -1,0 +1,16 @@
+{
+  "identificador": "5ba248f63420ad25a2c9c2f84dfa25490c041225da1b236a13bd20ba50574f9f",
+  "host": "192.168.1.30",
+  "porta": 5432,
+  "banco": "economizeprimaveradoleste_esc",
+  "usuario": "leitura_bi",
+  "identidade_real": {
+    "servidor": "192.168.1.30/32",
+    "porta": 5432,
+    "banco": "economizeprimaveradoleste_esc",
+    "usuario": "leitura_bi",
+    "esquema": "public"
+  },
+  "atualizado_em": "2026-08-06 18:56:14.870608",
+  "nonce": 1786053374870643300
+}

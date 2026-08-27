@@ -8099,130 +8099,171 @@ elif visao == "Análise Comercial":
         if competencia not in competencias_com_dados_status
     ]
     if faltantes_status:
-        st.warning(
-            "Competências realizadas ainda não atualizadas: "
-            + ", ".join(faltantes_status)
-            + ". Use o botão Atualizar análise."
-        )
+        if MODO_VIEWER:
+            st.warning(
+                "Competências ainda não presentes nos resumos publicados: "
+                + ", ".join(faltantes_status)
+                + ". Se já foram atualizadas localmente, use Reconstruir análise; caso contrário, atualize no aplicativo local e publique novamente."
+            )
+        else:
+            st.warning(
+                "Competências realizadas ainda não atualizadas: "
+                + ", ".join(faltantes_status)
+                + ". Use o botão Atualizar análise."
+            )
 
     ac_btn, ac_msg = st.columns([1.1, 3])
     with ac_btn:
-        if st.button(
-            "🔄 Atualizar análise",
-            key=f"atualizar_evolucao_{ano_selecionado}",
-            use_container_width=True,
-            help="Atualiza cada competência diretamente no PostgreSQL.",
-        ):
-            cfg_atualizacao = carregar_config_banco()
-            identidade_banco_atualizacao = validar_identidade_banco(cfg_atualizacao)
-            ano_numero = int(ano_selecionado)
-            ultimo_mes = (
-                12 if ano_numero < date.today().year
-                else date.today().month if ano_numero == date.today().year
-                else 0
+        if MODO_VIEWER:
+            atualizar_analise_clicado = st.button(
+                "🔄 Reconstruir análise",
+                key=f"reconstruir_evolucao_{ano_selecionado}",
+                use_container_width=True,
+                help="Reconstrói os resumos usando somente o SQLite publicado. Não acessa o PostgreSQL.",
             )
-
-            if ultimo_mes == 0:
-                st.info("O ano selecionado ainda não possui competências realizadas.")
-            else:
-                competencias_existentes = set(
-                    vendas_an.get("Competência", pd.Series(dtype=str))
-                    .dropna().astype(str).tolist()
-                ) | set(
-                    entradas_an.get("Competência", pd.Series(dtype=str))
-                    .dropna().astype(str).tolist()
-                )
-
-                competencias_realizadas = [
-                    f"{ano_numero:04d}-{numero_mes:02d}"
-                    for numero_mes in range(1, ultimo_mes + 1)
-                ]
-                competencias_faltantes = [
-                    competencia
-                    for competencia in competencias_realizadas
-                    if competencia not in competencias_existentes
-                ]
-
-                # Atualização manual prioriza somente competências faltantes.
-                # Caso todas existam, permite atualizar novamente o ano realizado.
-                competencias_atualizar = (
-                    competencias_faltantes
-                    if competencias_faltantes
-                    else competencias_realizadas
-                )
-
-                total_etapas = len(competencias_atualizar) * 3 + 1
-                etapa = 0
-                mensagens_ano = []
-                progresso_ano = st.progress(
-                    0,
-                    text=(
-                        "Atualizando competências faltantes..."
-                        if competencias_faltantes
-                        else "Atualizando competências realizadas..."
-                    ),
-                )
-
-                for competencia_atualizacao in competencias_atualizar:
-                    numero_mes = int(competencia_atualizacao[-2:])
-                    ultimo_dia = calendar.monthrange(ano_numero, numero_mes)[1]
-                    data_inicio_atualizacao = f"{competencia_atualizacao}-01"
-                    data_fim_atualizacao = f"{competencia_atualizacao}-{ultimo_dia:02d} 23:59:59"
-
-                    for fonte_atualizacao in ["vendas", "entradas", "contas_pagar"]:
-                        etapa += 1
-                        titulo = FONTES_BANCO[fonte_atualizacao]["titulo"]
-                        progresso_ano.progress(
-                            etapa / total_etapas,
-                            text=f"{competencia_atualizacao} • {titulo}",
-                        )
-                        try:
-                            qtd = executar_atualizacao_fonte(
-                                fonte_atualizacao,
-                                cfg_atualizacao,
-                                competencia_atualizacao,
-                                data_inicio_atualizacao,
-                                data_fim_atualizacao,
-                            )
-                            mensagens_ano.append(
-                                f"{competencia_atualizacao} • {titulo}: {qtd:,} registros"
-                            )
-                        except Exception as erro:
-                            mensagens_ano.append(
-                                f"{competencia_atualizacao} • {titulo}: ERRO — {erro}"
-                            )
-
-                competencia_estoque = f"{ano_numero:04d}-{ultimo_mes:02d}"
-                ultimo_dia = calendar.monthrange(ano_numero, ultimo_mes)[1]
-                etapa += 1
-                progresso_ano.progress(
-                    etapa / total_etapas,
-                    text=f"{competencia_estoque} • Estoque",
-                )
+            if atualizar_analise_clicado:
                 try:
-                    executar_atualizacao_fonte(
-                        "estoque",
-                        cfg_atualizacao,
-                        competencia_estoque,
-                        f"{competencia_estoque}-01",
-                        f"{competencia_estoque}-{ultimo_dia:02d} 23:59:59",
-                    )
+                    with st.spinner("Reconstruindo resumos da base publicada..."):
+                        with sqlite3.connect(CACHE_DB_FILE, timeout=60) as con_rebuild:
+                            garantir_tabelas_analise(con_rebuild)
+                            atualizar_resumos_analise(con_rebuild)
+                            reconstruir_posicoes_mensais(con_rebuild)
+                            con_rebuild.commit()
+                        try:
+                            _carregar_resumos_analise.clear()
+                        except Exception:
+                            pass
+                        try:
+                            _ler_cache_analise_cached.clear()
+                        except Exception:
+                            pass
+                        st.cache_data.clear()
+                    st.success("Análise reconstruída com os dados já publicados no Viewer.")
+                    st.rerun()
                 except Exception as erro:
-                    mensagens_ano.append(
-                        f"{competencia_estoque} • Estoque: ERRO — {erro}"
+                    st.error("Não foi possível reconstruir a análise a partir do SQLite publicado.")
+                    st.code(str(erro), language=None)
+        else:
+            if st.button(
+                "🔄 Atualizar análise",
+                key=f"atualizar_evolucao_{ano_selecionado}",
+                use_container_width=True,
+                help="Atualiza cada competência diretamente no PostgreSQL.",
+            ):
+                cfg_atualizacao = carregar_config_banco()
+                identidade_banco_atualizacao = validar_identidade_banco(cfg_atualizacao)
+                ano_numero = int(ano_selecionado)
+                ultimo_mes = (
+                    12 if ano_numero < date.today().year
+                    else date.today().month if ano_numero == date.today().year
+                    else 0
+                )
+
+                if ultimo_mes == 0:
+                    st.info("O ano selecionado ainda não possui competências realizadas.")
+                else:
+                    competencias_existentes = set(
+                        vendas_an.get("Competência", pd.Series(dtype=str))
+                        .dropna().astype(str).tolist()
+                    ) | set(
+                        entradas_an.get("Competência", pd.Series(dtype=str))
+                        .dropna().astype(str).tolist()
                     )
 
-                st.cache_data.clear()
-                progresso_ano.progress(1.0, text="Atualização concluída.")
-                st.success("Evolução Comercial atualizada mês a mês.")
-                with st.expander("Resultado da atualização"):
-                    st.code("\n".join(mensagens_ano[-60:]), language=None)
-                st.rerun()
+                    competencias_realizadas = [
+                        f"{ano_numero:04d}-{numero_mes:02d}"
+                        for numero_mes in range(1, ultimo_mes + 1)
+                    ]
+                    competencias_faltantes = [
+                        competencia
+                        for competencia in competencias_realizadas
+                        if competencia not in competencias_existentes
+                    ]
+
+                    competencias_atualizar = (
+                        competencias_faltantes
+                        if competencias_faltantes
+                        else competencias_realizadas
+                    )
+
+                    total_etapas = len(competencias_atualizar) * 3 + 1
+                    etapa = 0
+                    mensagens_ano = []
+                    progresso_ano = st.progress(
+                        0,
+                        text=(
+                            "Atualizando competências faltantes..."
+                            if competencias_faltantes
+                            else "Atualizando competências realizadas..."
+                        ),
+                    )
+
+                    for competencia_atualizacao in competencias_atualizar:
+                        numero_mes = int(competencia_atualizacao[-2:])
+                        ultimo_dia = calendar.monthrange(ano_numero, numero_mes)[1]
+                        data_inicio_atualizacao = f"{competencia_atualizacao}-01"
+                        data_fim_atualizacao = f"{competencia_atualizacao}-{ultimo_dia:02d} 23:59:59"
+
+                        for fonte_atualizacao in ["vendas", "entradas", "contas_pagar"]:
+                            etapa += 1
+                            titulo = FONTES_BANCO[fonte_atualizacao]["titulo"]
+                            progresso_ano.progress(
+                                etapa / total_etapas,
+                                text=f"{competencia_atualizacao} • {titulo}",
+                            )
+                            try:
+                                qtd = executar_atualizacao_fonte(
+                                    fonte_atualizacao,
+                                    cfg_atualizacao,
+                                    competencia_atualizacao,
+                                    data_inicio_atualizacao,
+                                    data_fim_atualizacao,
+                                )
+                                mensagens_ano.append(
+                                    f"{competencia_atualizacao} • {titulo}: {qtd:,} registros"
+                                )
+                            except Exception as erro:
+                                mensagens_ano.append(
+                                    f"{competencia_atualizacao} • {titulo}: ERRO — {erro}"
+                                )
+
+                    competencia_estoque = f"{ano_numero:04d}-{ultimo_mes:02d}"
+                    ultimo_dia = calendar.monthrange(ano_numero, ultimo_mes)[1]
+                    etapa += 1
+                    progresso_ano.progress(
+                        etapa / total_etapas,
+                        text=f"{competencia_estoque} • Estoque",
+                    )
+                    try:
+                        executar_atualizacao_fonte(
+                            "estoque",
+                            cfg_atualizacao,
+                            competencia_estoque,
+                            f"{competencia_estoque}-01",
+                            f"{competencia_estoque}-{ultimo_dia:02d} 23:59:59",
+                        )
+                    except Exception as erro:
+                        mensagens_ano.append(
+                            f"{competencia_estoque} • Estoque: ERRO — {erro}"
+                        )
+
+                    st.cache_data.clear()
+                    progresso_ano.progress(1.0, text="Atualização concluída.")
+                    st.success("Evolução Comercial atualizada mês a mês.")
+                    with st.expander("Resultado da atualização"):
+                        st.code("\n".join(mensagens_ano[-60:]), language=None)
+                    st.rerun()
     with ac_msg:
-        st.caption(
-            "A atualização é executada somente quando solicitada. "
-            "Na navegação normal, a tela continua lendo os resumos rápidos."
-        )
+        if MODO_VIEWER:
+            st.caption(
+                "No Viewer, este botão reconstrói os resumos usando somente os dados já publicados. "
+                "Para trazer novas competências do PostgreSQL, atualize-as no Atualizador Local e publique novamente."
+            )
+        else:
+            st.caption(
+                "A atualização é executada somente quando solicitada. "
+                "Na navegação normal, a tela continua lendo os resumos rápidos."
+            )
 
     st.markdown("### Evolução Comercial — mês a mês")
     st.caption(

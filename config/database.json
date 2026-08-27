@@ -1,0 +1,8 @@
+{
+  "host": "",
+  "porta": 5432,
+  "banco": "",
+  "usuario": "",
+  "senha": "",
+  "sslmode": "prefer"
+}

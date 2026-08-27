@@ -1,0 +1,17 @@
+PUBLICAÇÃO COMPACTA V2
+
+O GitHub NÃO recebe data/kpis_mensal.sqlite.
+Ele recebe data/kpis_mensal.sqlite.gz.
+
+Ao iniciar, o Viewer:
+1. descompacta a base;
+2. valida PRAGMA quick_check;
+3. só então abre os dashboards.
+
+No Atualizador Local:
+1. atualize as bases;
+2. abra Publicar Viewer Streamlit;
+3. mantenha a pasta do repositório já salva;
+4. clique PUBLICAR AGORA.
+
+O arquivo bruto de 283 MB não será mais enviado ao GitHub.

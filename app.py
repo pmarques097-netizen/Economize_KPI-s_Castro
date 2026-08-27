@@ -24,6 +24,8 @@ import unicodedata
 import re
 import traceback
 import shutil
+import gzip
+import subprocess
 
 try:
     from openpyxl import Workbook
@@ -57,6 +59,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# =========================================================
+# MODO DE EXECUÇÃO
+# =========================================================
+MODO_APLICACAO = "VIEWER_STREAMLIT"
+MODO_VIEWER = MODO_APLICACAO == "VIEWER_STREAMLIT"
+MODO_ATUALIZADOR = MODO_APLICACAO == "ATUALIZADOR_LOCAL"
 
 # =========================================================
 # CONTROLE DE ACESSO — REDE ECONOMIZE
@@ -2606,6 +2615,37 @@ DATA_DIR.mkdir(exist_ok=True)
 
 DB_CONFIG_FILE = CONFIG_DIR / "database.json"
 CACHE_DB_FILE = DATA_DIR / "kpis_mensal.sqlite"
+CACHE_DB_GZ_FILE = DATA_DIR / "kpis_mensal.sqlite.gz"
+
+def _preparar_sqlite_publicado():
+    """Descompacta e valida a base publicada antes de o Viewer usá-la."""
+    if not CACHE_DB_GZ_FILE.exists():
+        return
+    precisa = not CACHE_DB_FILE.exists()
+    if not precisa:
+        try:
+            precisa = CACHE_DB_GZ_FILE.stat().st_mtime > CACHE_DB_FILE.stat().st_mtime
+        except Exception:
+            precisa = True
+    if not precisa:
+        return
+
+    tmp = CACHE_DB_FILE.with_suffix(".tmp.sqlite")
+    tmp.unlink(missing_ok=True)
+    with gzip.open(CACHE_DB_GZ_FILE, "rb") as origem, tmp.open("wb") as destino:
+        shutil.copyfileobj(origem, destino, length=1024 * 1024)
+
+    con = sqlite3.connect(tmp, timeout=30)
+    try:
+        check = con.execute("PRAGMA quick_check").fetchone()
+        if not check or str(check[0]).lower() != "ok":
+            raise RuntimeError(f"SQLite publicado inválido: {check}")
+    finally:
+        con.close()
+    tmp.replace(CACHE_DB_FILE)
+
+_preparar_sqlite_publicado()
+
 CACHE_DB_ORIGIN_FILE = DATA_DIR / "origem_banco_cache.json"
 
 def _identificador_config_banco(cfg):
@@ -2929,45 +2969,13 @@ DB_CONFIG_PADRAO = {
 }
 
 def carregar_config_banco():
-    """Carrega configuração local e, no Streamlit Cloud, prioriza st.secrets["database"]."""
-    dados = DB_CONFIG_PADRAO.copy()
     if DB_CONFIG_FILE.exists():
         try:
-            local = json.loads(DB_CONFIG_FILE.read_text(encoding="utf-8"))
-            if isinstance(local, dict):
-                dados.update(local)
+            dados = json.loads(DB_CONFIG_FILE.read_text(encoding="utf-8"))
+            return {**DB_CONFIG_PADRAO, **dados}
         except Exception:
             pass
-
-    # Em produção online, credenciais devem vir do Secrets do Streamlit.
-    try:
-        segredo = st.secrets.get("database", {})
-        if segredo:
-            segredo = dict(segredo)
-            mapa = {
-                "host": "host",
-                "porta": "porta",
-                "port": "porta",
-                "banco": "banco",
-                "database": "banco",
-                "usuario": "usuario",
-                "user": "usuario",
-                "senha": "senha",
-                "password": "senha",
-                "sslmode": "sslmode",
-            }
-            for origem, destino in mapa.items():
-                if origem in segredo and str(segredo[origem]).strip() != "":
-                    dados[destino] = segredo[origem]
-            dados["salvar_senha"] = False
-    except Exception:
-        pass
-
-    try:
-        dados["porta"] = int(dados.get("porta", 5432) or 5432)
-    except Exception:
-        dados["porta"] = 5432
-    return dados
+    return DB_CONFIG_PADRAO.copy()
 
 def salvar_config_banco(dados):
     """Salva a conexão desta máquina e invalida qualquer configuração anterior."""
@@ -7212,14 +7220,20 @@ with st.sidebar:
         )
 
     st.caption("Gestão de Performance Comercial")
-    st.caption("⚡ Cache otimizado ativo")
+    st.caption("☁️ Viewer online • Somente leitura")
     st.divider()
     _renderizar_usuario_logado()
 
-    visao_label = st.radio(
-        "Navegação",
-        [
-            "📌 Metas e Parâmetros",
+    perfil_logado = st.session_state.get("_usuario_perfil", "Administrador")
+    if perfil_logado == "Comprador":
+        opcoes_navegacao = [
+            "🏆 Prêmio Comprador",
+            "💰 Prêmio por KPI",
+            "🌟 Portal de Premiação",
+            "🧾 Holerite da Premiação",
+        ]
+    else:
+        opcoes_navegacao = [
             "👔 Resumo CEO",
             "📚 Análise Comercial",
             "📊 Realizados",
@@ -7233,14 +7247,12 @@ with st.sidebar:
             "👔 Holerite do Gerente Comercial",
             "🏬 Premiação por Loja",
             "👥 Premiação por Supervisor e Gerente",
-            "🏪 Metas de Loja",
-            "🧭 Gestão de Metas",
-            "📥 Importar Ruptura",
-            "🗄️ Banco de Dados",
-            "👥 Compradores por Classificação",
             "🔎 Auditoria de Compradores",
-            "🧑‍💼 Cadastro de Compradores",
-        ],
+        ]
+
+    visao_label = st.radio(
+        "Navegação",
+        opcoes_navegacao,
         label_visibility="collapsed"
     )
 
@@ -7270,7 +7282,12 @@ with st.sidebar:
     visao = mapa_visoes[visao_label]
 
     st.markdown("### Filtros")
-    comprador = st.selectbox("Comprador", ["Todos"] + COMPRADORES)
+    if st.session_state.get("_usuario_perfil") == "Comprador":
+        comprador_logado = st.session_state.get("_usuario_comprador", "")
+        comprador = comprador_logado
+        st.info(f"Comprador: {comprador_logado}")
+    else:
+        comprador = st.selectbox("Comprador", ["Todos"] + COMPRADORES)
 
     st.markdown("#### Período ativo")
     st.info(
@@ -7279,17 +7296,27 @@ with st.sidebar:
         f"{data_br(METAS_GESTOR.get('data_fim',''))}"
     )
 
-    with st.expander("Status das fontes", expanded=False):
-        st.write("**Vendas:** banco de dados")
-        st.write("**Estoque:** banco de dados")
-        st.write("**Entradas:** banco de dados")
-        st.write("**Ruptura:** automática por pasta")
-        st.write("**Snapshots mensais:** SQLite local")
+    with st.expander("Status da publicação", expanded=False):
+        try:
+            atualizado = datetime.fromtimestamp(CACHE_DB_FILE.stat().st_mtime).strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            atualizado = "Não identificado"
+        st.write(f"**Base publicada:** {atualizado}")
+        st.write("**Origem:** Atualizador Local")
+        st.write("**Modo:** somente leitura")
 
     st.divider()
     st.caption("Rede Economize • Enterprise")
 
 iniciar_contexto_exportacao(visao, METAS_GESTOR.get("periodo_referencia", "-"))
+
+if MODO_VIEWER and visao in {
+    "Metas e Parâmetros", "Metas de Loja", "Gestão de Metas",
+    "Importar Ruptura", "Banco de Dados",
+    "Compradores por Classificação", "Cadastro de Compradores",
+}:
+    st.error("Esta função está disponível somente no Atualizador Local.")
+    st.stop()
 
 st.markdown(f"""
 <div class="eirox-shell">

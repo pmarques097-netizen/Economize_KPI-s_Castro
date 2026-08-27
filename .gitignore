@@ -1,11 +1,10 @@
 .venv/
 __pycache__/
 *.pyc
-*.pyo
 *.log
-.DS_Store
-Thumbs.db
-config/database.local.json
-.streamlit/secrets.toml
+config/database.json
 data/backups_troca_banco/
 data/logs/
+RELACAO_USUARIOS_E_SENHAS.txt
+
+data/kpis_mensal.sqlite

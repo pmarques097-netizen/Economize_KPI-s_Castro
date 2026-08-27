@@ -3303,6 +3303,47 @@ def reconstruir_posicoes_mensais(con, periodo=None):
 
 
 
+
+def diagnosticar_competencias_sqlite(con):
+    """Retorna competências presentes nas bases brutas e nos resumos."""
+    resultado = {}
+    tabelas = [
+        "base_vendas",
+        "base_entradas",
+        "base_entradas_financeira",
+        "base_contas_pagar",
+        "base_estoque",
+        "analise_vendas_resumo",
+        "analise_entradas_resumo",
+        "analise_contas_resumo",
+        "analise_estoque_resumo",
+    ]
+    existentes = {
+        r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    for tabela in tabelas:
+        if tabela not in existentes:
+            resultado[tabela] = []
+            continue
+        colunas = {
+            r[1] for r in con.execute(f'PRAGMA table_info("{tabela}")').fetchall()
+        }
+        if "periodo_referencia" not in colunas:
+            resultado[tabela] = []
+            continue
+        rows = con.execute(
+            f'SELECT DISTINCT TRIM(periodo_referencia) '
+            f'FROM "{tabela}" '
+            f'WHERE periodo_referencia IS NOT NULL '
+            f'AND TRIM(periodo_referencia) <> "" '
+            f'ORDER BY 1'
+        ).fetchall()
+        resultado[tabela] = [str(r[0]) for r in rows if r and r[0]]
+    return resultado
+
+
 def garantir_tabelas_analise(con):
     """Cria todas as tabelas de resumo necessárias antes de qualquer atualização."""
     con.execute("""
@@ -3388,13 +3429,7 @@ def atualizar_resumos_analise(con, fonte=None, periodo=None):
             INSERT OR REPLACE INTO analise_vendas_resumo
                 (periodo_referencia, classificacao, venda, custo)
             SELECT
-                SUBSTR(
-                    COALESCE(
-                        NULLIF(TRIM(datahora_venda_final), ''),
-                        NULLIF(TRIM(datahora), ''),
-                        periodo_referencia
-                    ), 1, 7
-                ) AS periodo_referencia,
+                TRIM(periodo_referencia) AS periodo_referencia,
                 COALESCE(NULLIF(TRIM(classificacao_3_nivel), ''),
                          NULLIF(TRIM(classificacao_resumida), ''),
                          'SEM CLASSIFICACAO') AS classificacao,
@@ -3405,21 +3440,15 @@ def atualizar_resumos_analise(con, fonte=None, periodo=None):
                 ) AS custo
             FROM base_vendas
         """ + (
-            " WHERE SUBSTR(COALESCE(NULLIF(TRIM(datahora_venda_final), ''), "
-            "NULLIF(TRIM(datahora), ''), periodo_referencia), 1, 7) = ?"
-            if periodo else ""
+            " WHERE TRIM(periodo_referencia) = ?"
+            if periodo else
+            " WHERE COALESCE(TRIM(periodo_referencia), '') <> ''"
         ) + """
             GROUP BY
-                SUBSTR(
-                    COALESCE(
-                        NULLIF(TRIM(datahora_venda_final), ''),
-                        NULLIF(TRIM(datahora), ''),
-                        periodo_referencia
-                    ), 1, 7
-                ),
-                     COALESCE(NULLIF(TRIM(classificacao_3_nivel), ''),
-                              NULLIF(TRIM(classificacao_resumida), ''),
-                              'SEM CLASSIFICACAO')
+                TRIM(periodo_referencia),
+                COALESCE(NULLIF(TRIM(classificacao_3_nivel), ''),
+                         NULLIF(TRIM(classificacao_resumida), ''),
+                         'SEM CLASSIFICACAO')
         """, params)
 
     if fonte in (None, "entradas"):
@@ -3437,13 +3466,7 @@ def atualizar_resumos_analise(con, fonte=None, periodo=None):
             INSERT OR REPLACE INTO analise_entradas_resumo
                 (periodo_referencia, classificacao, compra)
             SELECT
-                SUBSTR(
-                    COALESCE(
-                        NULLIF(TRIM(data_entrada), ''),
-                        NULLIF(TRIM(data_emissao), ''),
-                        periodo_referencia
-                    ), 1, 7
-                ) AS periodo_referencia,
+                TRIM(periodo_referencia) AS periodo_referencia,
                 COALESCE(NULLIF(TRIM(classificacao_3_nivel), ''), 'SEM CLASSIFICACAO'),
                 SUM(
                     COALESCE(
@@ -3454,19 +3477,13 @@ def atualizar_resumos_analise(con, fonte=None, periodo=None):
                 )
             FROM base_entradas
         """ + (
-            " WHERE SUBSTR(COALESCE(NULLIF(TRIM(data_entrada), ''), "
-            "NULLIF(TRIM(data_emissao), ''), periodo_referencia), 1, 7) = ?"
-            if periodo else ""
+            " WHERE TRIM(periodo_referencia) = ?"
+            if periodo else
+            " WHERE COALESCE(TRIM(periodo_referencia), '') <> ''"
         ) + """
             GROUP BY
-                SUBSTR(
-                    COALESCE(
-                        NULLIF(TRIM(data_entrada), ''),
-                        NULLIF(TRIM(data_emissao), ''),
-                        periodo_referencia
-                    ), 1, 7
-                ),
-                     COALESCE(NULLIF(TRIM(classificacao_3_nivel), ''), 'SEM CLASSIFICACAO')
+                TRIM(periodo_referencia),
+                COALESCE(NULLIF(TRIM(classificacao_3_nivel), ''), 'SEM CLASSIFICACAO')
         """, params)
 
         con.execute("""
@@ -3512,25 +3529,19 @@ def atualizar_resumos_analise(con, fonte=None, periodo=None):
             INSERT OR REPLACE INTO analise_contas_resumo
                 (periodo_referencia, plano_contas, pagamento)
             SELECT
-                SUBSTR(
-                    COALESCE(NULLIF(TRIM(data_pagamento), ''), periodo_referencia),
-                    1, 7
-                ) AS periodo_referencia,
+                TRIM(periodo_referencia) AS periodo_referencia,
                 COALESCE(NULLIF(TRIM(plano_contas), ''), 'SEM PLANO DE CONTAS'),
                 SUM(COALESCE(CAST(valor_pago AS REAL), 0))
             FROM base_contas_pagar
         """ + (
-            " WHERE SUBSTR(COALESCE(NULLIF(TRIM(data_pagamento), ''), "
-            "periodo_referencia), 1, 7) = ? "
+            " WHERE TRIM(periodo_referencia) = ? "
             "AND COALESCE(CAST(valor_pago AS REAL), 0) <> 0"
             if periodo else
-            " WHERE COALESCE(CAST(valor_pago AS REAL), 0) <> 0"
+            " WHERE COALESCE(TRIM(periodo_referencia), '') <> '' "
+            "AND COALESCE(CAST(valor_pago AS REAL), 0) <> 0"
         ) + """
             GROUP BY
-                SUBSTR(
-                    COALESCE(NULLIF(TRIM(data_pagamento), ''), periodo_referencia),
-                    1, 7
-                ),
+                TRIM(periodo_referencia),
                 COALESCE(NULLIF(TRIM(plano_contas), ''), 'SEM PLANO DE CONTAS')
         """, params)
 

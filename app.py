@@ -115,7 +115,7 @@ def _dados_acesso_usuario(usuario, senha):
     senha_hash = _hash_senha_acesso(senha)
     hash_admin = _USUARIOS_SISTEMA.get(usuario_norm)
     if hash_admin and hmac.compare_digest(senha_hash, hash_admin):
-        return {"autorizado": True, "usuario": usuario_norm, "nome": usuario_norm.title(), "perfil": "Administrador", "comprador": ""}
+        return {"autorizado": True, "usuario": usuario_norm, "nome": usuario_norm.title(), "perfil": "Administrador", "comprador": "", "vendedor": ""}
 
     for item in _carregar_acessos_compradores():
         if _normalizar_usuario_acesso(item.get("usuario")) != usuario_norm:
@@ -123,10 +123,17 @@ def _dados_acesso_usuario(usuario, senha):
         if not bool(item.get("ativo", True)):
             continue
         esperado = str(item.get("senha_hash", ""))
-        if esperado and hmac.compare_digest(senha_hash, esperado):
-            comprador = str(item.get("comprador", "")).strip()
-            return {"autorizado": True, "usuario": usuario_norm, "nome": comprador or usuario_norm.title(), "perfil": "Comprador", "comprador": comprador}
-    return {"autorizado": False, "usuario": usuario_norm, "nome": "", "perfil": "", "comprador": ""}
+        if not esperado or not hmac.compare_digest(senha_hash, esperado):
+            continue
+        perfil = str(item.get("perfil") or "Comprador").strip().title()
+        if perfil not in {"Comprador", "Vendedor"}:
+            perfil = "Comprador"
+        comprador = str(item.get("comprador", "")).strip()
+        vendedor = str(item.get("vendedor", "")).strip()
+        nome = vendedor if perfil == "Vendedor" else comprador
+        return {"autorizado": True, "usuario": usuario_norm, "nome": nome or usuario_norm.title(), "perfil": perfil, "comprador": comprador if perfil == "Comprador" else "", "vendedor": vendedor if perfil == "Vendedor" else ""}
+
+    return {"autorizado": False, "usuario": usuario_norm, "nome": "", "perfil": "", "comprador": "", "vendedor": ""}
 
 
 def _renderizar_login_sistema():
@@ -156,7 +163,8 @@ def _renderizar_login_sistema():
                 st.session_state["_usuario_autenticado"] = dados["usuario"]
                 st.session_state["_usuario_nome_exibicao"] = dados["nome"]
                 st.session_state["_usuario_perfil"] = dados["perfil"]
-                st.session_state["_usuario_comprador"] = dados["comprador"]
+                st.session_state["_usuario_comprador"] = dados.get("comprador", "")
+                st.session_state["_usuario_vendedor"] = dados.get("vendedor", "")
                 st.rerun()
             else:
                 st.error("Usuário ou senha inválidos.")
@@ -173,7 +181,7 @@ def _renderizar_usuario_logado():
     st.sidebar.markdown(f"**👤 {nome}**")
     st.sidebar.caption(f"Perfil: {perfil}")
     if st.sidebar.button("↩️ Sair", use_container_width=True, key="logout_rede"):
-        for chave in ["_usuario_autenticado","_usuario_nome_exibicao","_usuario_perfil","_usuario_comprador"]:
+        for chave in ["_usuario_autenticado","_usuario_nome_exibicao","_usuario_perfil","_usuario_comprador","_usuario_vendedor"]:
             st.session_state.pop(chave, None)
         st.rerun()
 
@@ -226,6 +234,63 @@ def _renderizar_gestao_acessos_compradores():
                 _salvar_acessos_compradores(novos)
                 st.success("Acesso atualizado.")
                 st.rerun()
+
+def _perfil_logado():
+    return str(st.session_state.get("_usuario_perfil", "Administrador") or "Administrador").strip()
+
+def _escopo_usuario_logado():
+    perfil = _perfil_logado()
+    if perfil == "Comprador":
+        return str(st.session_state.get("_usuario_comprador", "") or "").strip()
+    if perfil == "Vendedor":
+        return str(st.session_state.get("_usuario_vendedor", "") or "").strip()
+    return ""
+
+def _norm_escopo(valor):
+    texto = unicodedata.normalize("NFKD", str(valor or "").strip().casefold())
+    return "".join(c for c in texto if not unicodedata.combining(c))
+
+def _filtrar_df_por_usuario_logado(df):
+    if not isinstance(df, pd.DataFrame):
+        return df
+    perfil = _perfil_logado()
+    if perfil == "Administrador":
+        return df
+
+    escopo = _escopo_usuario_logado()
+    if not escopo:
+        return df.iloc[0:0].copy()
+
+    candidatos = (
+        ["Comprador", "comprador", "Comprador Responsável", "comprador_responsavel"]
+        if perfil == "Comprador"
+        else ["Vendedor", "vendedor", "Nome Vendedor", "nome_vendedor", "Vendedor Responsável", "vendedor_responsavel"]
+    )
+    coluna = next((c for c in candidatos if c in df.columns), None)
+    if coluna is None:
+        return df.iloc[0:0].copy()
+
+    alvo = _norm_escopo(escopo)
+    return df.loc[df[coluna].map(_norm_escopo).eq(alvo)].copy()
+
+def _filtrar_objeto_por_usuario_logado(obj):
+    if isinstance(obj, pd.DataFrame):
+        return _filtrar_df_por_usuario_logado(obj)
+    if isinstance(obj, dict):
+        if _perfil_logado() == "Administrador":
+            return obj
+        alvo = _norm_escopo(_escopo_usuario_logado())
+        return {k: v for k, v in obj.items() if _norm_escopo(k) == alvo}
+    return obj
+
+def _menu_permitido_por_perfil():
+    perfil = _perfil_logado()
+    if perfil == "Comprador":
+        return ["📊 Realizados","🎯 Métricas Destaque","📈 Resultado Métricas","🏆 Prêmio Comprador","💰 Prêmio por KPI","🌟 Portal de Premiação","🧾 Holerite da Premiação"]
+    if perfil == "Vendedor":
+        return ["📊 Realizados","🌟 Portal de Premiação","🧾 Holerite da Premiação"]
+    return None
+
 
 _renderizar_login_sistema()
 
@@ -5776,6 +5841,14 @@ METAS = filtrar_dataframe_compradores_ativos(METAS)
 RESULTADO = filtrar_dataframe_compradores_ativos(RESULTADO)
 PREMIO = filtrar_dataframe_compradores_ativos(PREMIO)
 
+REALIZADOS = _filtrar_df_por_usuario_logado(REALIZADOS)
+METAS = _filtrar_df_por_usuario_logado(METAS)
+RESULTADO = _filtrar_df_por_usuario_logado(RESULTADO)
+PREMIO = _filtrar_df_por_usuario_logado(PREMIO)
+PREMIO_KPI = _filtrar_objeto_por_usuario_logado(PREMIO_KPI)
+if "RUPTURA_IMPORTADA" in globals() and isinstance(RUPTURA_IMPORTADA, pd.DataFrame):
+    RUPTURA_IMPORTADA = _filtrar_df_por_usuario_logado(RUPTURA_IMPORTADA)
+
 
 # =========================================================
 # MOTOR DINÂMICO DAS VISÕES
@@ -7247,14 +7320,10 @@ with st.sidebar:
     st.divider()
     _renderizar_usuario_logado()
 
-    perfil_logado = st.session_state.get("_usuario_perfil", "Administrador")
-    if perfil_logado == "Comprador":
-        opcoes_navegacao = [
-            "🏆 Prêmio Comprador",
-            "💰 Prêmio por KPI",
-            "🌟 Portal de Premiação",
-            "🧾 Holerite da Premiação",
-        ]
+    perfil_logado = _perfil_logado()
+    menu_restrito = _menu_permitido_por_perfil()
+    if menu_restrito is not None:
+        opcoes_navegacao = menu_restrito
     else:
         opcoes_navegacao = [
             "👔 Resumo CEO",
@@ -7304,11 +7373,20 @@ with st.sidebar:
     }
     visao = mapa_visoes[visao_label]
 
+    if perfil_logado != "Administrador":
+        visoes_permitidas = {mapa_visoes[x] for x in opcoes_navegacao}
+        if visao not in visoes_permitidas:
+            st.error("Acesso não autorizado para este perfil.")
+            st.stop()
+
     st.markdown("### Filtros")
-    if st.session_state.get("_usuario_perfil") == "Comprador":
-        comprador_logado = st.session_state.get("_usuario_comprador", "")
-        comprador = comprador_logado
-        st.info(f"Comprador: {comprador_logado}")
+    perfil_atual = _perfil_logado()
+    if perfil_atual == "Comprador":
+        comprador = _escopo_usuario_logado()
+        st.info(f"🔒 Comprador: {comprador}")
+    elif perfil_atual == "Vendedor":
+        comprador = "Todos"
+        st.info(f"🔒 Vendedor: {_escopo_usuario_logado()}")
     else:
         comprador = st.selectbox("Comprador", ["Todos"] + COMPRADORES)
 
@@ -7360,12 +7438,19 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-_TOTAIS_CARDS = carregar_totais_cards_diretos(PERIODO_REALIZADO_USADO, _TOKEN_VISOES)
-fat = float(_TOTAIS_CARDS.get("faturamento", 0.0))
-cmv = float(_TOTAIS_CARDS.get("cmv", 0.0))
-estoque = float(_TOTAIS_CARDS.get("estoque", 0.0))
-ruptura = float(_TOTAIS_CARDS.get("ruptura", 0.0))
-reposicao = float(_TOTAIS_CARDS.get("reposicao", 0.0))
+if _perfil_logado() == "Administrador":
+    _TOTAIS_CARDS = carregar_totais_cards_diretos(PERIODO_REALIZADO_USADO, _TOKEN_VISOES)
+    fat = float(_TOTAIS_CARDS.get("faturamento", 0.0))
+    cmv = float(_TOTAIS_CARDS.get("cmv", 0.0))
+    estoque = float(_TOTAIS_CARDS.get("estoque", 0.0))
+    ruptura = float(_TOTAIS_CARDS.get("ruptura", 0.0))
+    reposicao = float(_TOTAIS_CARDS.get("reposicao", 0.0))
+else:
+    fat = float(pd.to_numeric(REALIZADOS.get("Faturamento Total Atual", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    cmv = float(pd.to_numeric(REALIZADOS.get("CMV mês Atual", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    estoque = float(pd.to_numeric(REALIZADOS.get("Estoque Total", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    ruptura = float(pd.to_numeric(REALIZADOS.get("Ruptura Ativa", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    reposicao = float(pd.to_numeric(REALIZADOS.get("Entradas CUSTO", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
 
 st.markdown(f"""
 <div class="kpi-grid">

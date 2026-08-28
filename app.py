@@ -321,6 +321,103 @@ def _menu_permitido_por_perfil():
     return None
 
 
+
+# ============================================================
+# AJUSTE GLOBAL — VALORES COMPLETOS NOS CARDS
+# ============================================================
+st.markdown(
+    """
+    <style id="eirox-card-values-full">
+    /* Streamlit metric: nunca cortar com ... */
+    [data-testid="stMetricValue"],
+    [data-testid="stMetricValue"] > div,
+    [data-testid="stMetricValue"] p,
+    [data-testid="stMetricValue"] span {
+        white-space: nowrap !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        max-width: none !important;
+    }
+
+    [data-testid="stMetricValue"] {
+        font-size: clamp(1.18rem, 1.62vw, 2rem) !important;
+        line-height: 1.12 !important;
+        letter-spacing: -0.035em !important;
+    }
+
+    [data-testid="stMetricValue"] > div,
+    [data-testid="stMetricValue"] p {
+        font-size: inherit !important;
+        line-height: inherit !important;
+        letter-spacing: inherit !important;
+    }
+
+    /* Cards customizados usados no projeto */
+    .hp-card-value,
+    .rec-card-value,
+    .premium-box .value,
+    .status-card-kpi .value,
+    .meta-card .value,
+    .kpi-card .value,
+    .metric-value,
+    .card-value {
+        white-space: nowrap !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        max-width: 100% !important;
+        font-size: clamp(1.15rem, 1.55vw, 1.95rem) !important;
+        line-height: 1.12 !important;
+        letter-spacing: -0.035em !important;
+    }
+
+    /* Evita que o container interno aplique ellipsis */
+    [data-testid="stMetric"] {
+        overflow: visible !important;
+        min-width: 0 !important;
+    }
+
+    [data-testid="stMetric"] > div {
+        overflow: visible !important;
+        min-width: 0 !important;
+    }
+
+    /* Em notebooks / resoluções médias, reduz antes de cortar */
+    @media (max-width: 1500px) {
+        [data-testid="stMetricValue"] {
+            font-size: clamp(1.05rem, 1.45vw, 1.72rem) !important;
+        }
+        .hp-card-value,
+        .rec-card-value,
+        .premium-box .value,
+        .status-card-kpi .value,
+        .meta-card .value,
+        .kpi-card .value,
+        .metric-value,
+        .card-value {
+            font-size: clamp(1.02rem, 1.40vw, 1.68rem) !important;
+        }
+    }
+
+    @media (max-width: 1180px) {
+        [data-testid="stMetricValue"] {
+            font-size: 1.08rem !important;
+        }
+        .hp-card-value,
+        .rec-card-value,
+        .premium-box .value,
+        .status-card-kpi .value,
+        .meta-card .value,
+        .kpi-card .value,
+        .metric-value,
+        .card-value {
+            font-size: 1.04rem !important;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 _renderizar_login_sistema()
 
 _perfil_validado_seguro = _perfil_logado()

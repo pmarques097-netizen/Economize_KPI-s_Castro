@@ -115,7 +115,7 @@ def _dados_acesso_usuario(usuario, senha):
     senha_hash = _hash_senha_acesso(senha)
     hash_admin = _USUARIOS_SISTEMA.get(usuario_norm)
     if hash_admin and hmac.compare_digest(senha_hash, hash_admin):
-        return {"autorizado": True, "usuario": usuario_norm, "nome": usuario_norm.title(), "perfil": "Administrador", "comprador": "", "vendedor": ""}
+        return {"autorizado": True, "usuario": usuario_norm, "nome": usuario_norm.title(), "perfil": "Administrador", "comprador": "", "vendedor": "", "gerente": ""}
 
     for item in _carregar_acessos_compradores():
         if _normalizar_usuario_acesso(item.get("usuario")) != usuario_norm:
@@ -126,14 +126,28 @@ def _dados_acesso_usuario(usuario, senha):
         if not esperado or not hmac.compare_digest(senha_hash, esperado):
             continue
         perfil = str(item.get("perfil") or "Comprador").strip().title()
-        if perfil not in {"Comprador", "Vendedor"}:
+        if perfil not in {"Comprador", "Vendedor", "Gerente"}:
             perfil = "Comprador"
         comprador = str(item.get("comprador", "")).strip()
         vendedor = str(item.get("vendedor", "")).strip()
-        nome = vendedor if perfil == "Vendedor" else comprador
-        return {"autorizado": True, "usuario": usuario_norm, "nome": nome or usuario_norm.title(), "perfil": perfil, "comprador": comprador if perfil == "Comprador" else "", "vendedor": vendedor if perfil == "Vendedor" else ""}
+        gerente = str(item.get("gerente", "")).strip()
+        if perfil == "Comprador":
+            nome = comprador
+        elif perfil == "Vendedor":
+            nome = vendedor
+        else:
+            nome = gerente
+        return {
+            "autorizado": True,
+            "usuario": usuario_norm,
+            "nome": nome or usuario_norm.title(),
+            "perfil": perfil,
+            "comprador": comprador if perfil == "Comprador" else "",
+            "vendedor": vendedor if perfil == "Vendedor" else "",
+            "gerente": gerente if perfil == "Gerente" else "",
+        }
 
-    return {"autorizado": False, "usuario": usuario_norm, "nome": "", "perfil": "", "comprador": "", "vendedor": ""}
+    return {"autorizado": False, "usuario": usuario_norm, "nome": "", "perfil": "", "comprador": "", "vendedor": "", "gerente": ""}
 
 
 def _renderizar_login_sistema():
@@ -165,6 +179,7 @@ def _renderizar_login_sistema():
                 st.session_state["_usuario_perfil"] = dados["perfil"]
                 st.session_state["_usuario_comprador"] = dados.get("comprador", "")
                 st.session_state["_usuario_vendedor"] = dados.get("vendedor", "")
+                st.session_state["_usuario_gerente"] = dados.get("gerente", "")
                 st.rerun()
             else:
                 st.error("Usuário ou senha inválidos.")
@@ -181,7 +196,7 @@ def _renderizar_usuario_logado():
     st.sidebar.markdown(f"**👤 {nome}**")
     st.sidebar.caption(f"Perfil: {perfil}")
     if st.sidebar.button("↩️ Sair", use_container_width=True, key="logout_rede"):
-        for chave in ["_usuario_autenticado","_usuario_nome_exibicao","_usuario_perfil","_usuario_comprador","_usuario_vendedor"]:
+        for chave in ["_usuario_autenticado","_usuario_nome_exibicao","_usuario_perfil","_usuario_comprador","_usuario_vendedor","_usuario_gerente"]:
             st.session_state.pop(chave, None)
         st.rerun()
 
@@ -244,6 +259,8 @@ def _escopo_usuario_logado():
         return str(st.session_state.get("_usuario_comprador", "") or "").strip()
     if perfil == "Vendedor":
         return str(st.session_state.get("_usuario_vendedor", "") or "").strip()
+    if perfil == "Gerente":
+        return str(st.session_state.get("_usuario_gerente", "") or "").strip()
     return ""
 
 def _norm_escopo(valor):
@@ -289,6 +306,8 @@ def _menu_permitido_por_perfil():
         return ["📊 Realizados","🎯 Métricas Destaque","📈 Resultado Métricas","🏆 Prêmio Comprador","💰 Prêmio por KPI","🌟 Portal de Premiação","🧾 Holerite da Premiação"]
     if perfil == "Vendedor":
         return ["📊 Realizados","🌟 Portal de Premiação","🧾 Holerite da Premiação"]
+    if perfil == "Gerente":
+        return ["🌟 Portal de Premiação","👔 Holerite do Gerente Comercial"]
     return None
 
 
@@ -9185,6 +9204,81 @@ elif visao == "Portal de Premiação":
     )
     ranking_comp = _premio_total_por_comprador()
     rateio_h = _hierarquia_rateio(PERIODO_REALIZADO_USADO)
+
+    _perfil_portal = _perfil_logado()
+    _escopo_portal = _escopo_usuario_logado()
+
+    if _perfil_portal == "Comprador":
+        if "Comprador" in ranking_comp.columns:
+            ranking_comp = ranking_comp.loc[
+                ranking_comp["Comprador"].map(_norm_escopo).eq(_norm_escopo(_escopo_portal))
+            ].copy()
+        else:
+            ranking_comp = ranking_comp.iloc[0:0].copy()
+
+        _premio_individual = (
+            float(pd.to_numeric(
+                ranking_comp.get("Prêmio Total", pd.Series(dtype=float)),
+                errors="coerce"
+            ).fillna(0).sum())
+            if not ranking_comp.empty else 0.0
+        )
+
+        st.markdown("### 🔒 Minha Premiação")
+        c1, c2 = st.columns(2)
+        c1.metric("Comprador", _escopo_portal or "-")
+        c2.metric("Prêmio conquistado", moeda_real(_premio_individual))
+
+        if ranking_comp.empty:
+            st.info("Não há premiação calculada para seu usuário nesta competência.")
+        else:
+            _minha = ranking_comp.copy()
+            for _col in ["Posição", "Pos.", "Ranking", "Rank"]:
+                if _col in _minha.columns:
+                    _minha = _minha.drop(columns=[_col])
+            dataframe_br(
+                _minha,
+                use_container_width=True,
+                hide_index=True,
+                export_title=f"Minha Premiação - {_escopo_portal}",
+            )
+        st.caption("🔒 Esta área exibe exclusivamente sua própria premiação.")
+        st.stop()
+
+    if _perfil_portal == "Gerente":
+        if not rateio_h.empty and "Gerente" in rateio_h.columns:
+            _meu_rateio = rateio_h.loc[
+                rateio_h["Gerente"].map(_norm_escopo).eq(_norm_escopo(_escopo_portal))
+            ].copy()
+        else:
+            _meu_rateio = pd.DataFrame()
+
+        _col_premio = next(
+            (c for c in ["Prêmio rateado", "Prêmio Rateado", "Prêmio Total", "Premio rateado"]
+             if c in _meu_rateio.columns),
+            None,
+        )
+        _premio_gerente = (
+            float(pd.to_numeric(_meu_rateio[_col_premio], errors="coerce").fillna(0).sum())
+            if _col_premio and not _meu_rateio.empty else 0.0
+        )
+
+        st.markdown("### 🔒 Minha Premiação Gerencial")
+        c1, c2 = st.columns(2)
+        c1.metric("Gerente", _escopo_portal or "-")
+        c2.metric("Prêmio conquistado", moeda_real(_premio_gerente))
+        st.caption(
+            "🔒 Não são exibidos compradores, outros gerentes, rankings ou valores de terceiros."
+        )
+        st.stop()
+
+    if _perfil_portal == "Vendedor":
+        st.markdown("### 🔒 Minha Premiação")
+        st.info(
+            "O Portal consolidado não exibe dados de terceiros para vendedores. "
+            "Use o holerite individual quando houver premiação vinculada."
+        )
+        st.stop()
     total_premio = float(ranking_comp["Prêmio Total"].sum()) if not ranking_comp.empty else 0.0
     lojas_qtd = int(rateio_h["Loja"].nunique()) if not rateio_h.empty else 0
     supervisores_qtd = int(rateio_h.loc[rateio_h["Supervisor"] != "Não cadastrado", "Supervisor"].nunique()) if not rateio_h.empty else 0

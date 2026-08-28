@@ -3152,6 +3152,18 @@ def salvar_sql(caminho, conteudo):
     caminho.write_text(conteudo.strip() + "\n", encoding="utf-8")
 
 def conexao_cache():
+    # Viewer usa SQLite somente leitura durante a navegacao.
+    if MODO_VIEWER:
+        caminho = CACHE_DB_FILE.resolve().as_posix()
+        con = sqlite3.connect(f"file:{caminho}?mode=ro", uri=True, timeout=30)
+        try:
+            con.execute("PRAGMA query_only=ON")
+            con.execute("PRAGMA busy_timeout=30000")
+            con.execute("PRAGMA cache_size=-64000")
+        except Exception:
+            pass
+        return con
+
     con = sqlite3.connect(CACHE_DB_FILE, timeout=30)
     try:
         con.execute("PRAGMA journal_mode=WAL")

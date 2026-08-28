@@ -294,5 +294,43 @@
     "valor_premio": 3000.0,
     "status": "Ativa",
     "ultima_atualizacao": ""
+  },
+  {
+    "periodo_referencia": "2026-08",
+    "comprador": "Geane",
+    "meta_venda": 427815.44404209254,
+    "participacao_venda_pct": 30.061700364156636,
+    "meta_cmv_pct": 66.0,
+    "meta_cmv_valor": 282358.19306778105,
+    "fator_cobertura": 1.5,
+    "meta_estoque_total": 423537.28960167157,
+    "meta_curva_a_pct": 20.0,
+    "meta_curva_b_pct": 30.0,
+    "meta_curva_c_pct": 40.0,
+    "meta_curva_d_pct": 10.0,
+    "meta_ruptura_pct": 5.0,
+    "meta_reposicao_pct": 99.0,
+    "valor_premio": 3000.0,
+    "status": "Ativa",
+    "ultima_atualizacao": ""
+  },
+  {
+    "periodo_referencia": "2026-08",
+    "comprador": "Renato",
+    "meta_venda": 995309.1259579074,
+    "participacao_venda_pct": 69.93829963584336,
+    "meta_cmv_pct": 66.0,
+    "meta_cmv_valor": 656904.0231322189,
+    "fator_cobertura": 1.5,
+    "meta_estoque_total": 985356.0346983282,
+    "meta_curva_a_pct": 20.0,
+    "meta_curva_b_pct": 30.0,
+    "meta_curva_c_pct": 40.0,
+    "meta_curva_d_pct": 10.0,
+    "meta_ruptura_pct": 5.0,
+    "meta_reposicao_pct": 99.0,
+    "valor_premio": 3000.0,
+    "status": "Ativa",
+    "ultima_atualizacao": ""
   }
 ]

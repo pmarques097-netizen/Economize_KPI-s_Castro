@@ -278,11 +278,21 @@ def _filtrar_df_por_usuario_logado(df):
     if not escopo:
         return df.iloc[0:0].copy()
 
-    candidatos = (
-        ["Comprador", "comprador", "Comprador Responsável", "comprador_responsavel"]
-        if perfil == "Comprador"
-        else ["Vendedor", "vendedor", "Nome Vendedor", "nome_vendedor", "Vendedor Responsável", "vendedor_responsavel"]
-    )
+    if perfil == "Comprador":
+        candidatos = [
+            "Comprador", "comprador", "Comprador Responsável",
+            "comprador_responsavel", "Nome Comprador", "nome_comprador"
+        ]
+    elif perfil == "Gerente":
+        candidatos = [
+            "Gerente", "gerente", "Gerente Comercial", "gerente_comercial",
+            "Nome Gerente", "nome_gerente"
+        ]
+    else:
+        candidatos = [
+            "Vendedor", "vendedor", "Nome Vendedor", "nome_vendedor",
+            "Vendedor Responsável", "vendedor_responsavel"
+        ]
     coluna = next((c for c in candidatos if c in df.columns), None)
     if coluna is None:
         return df.iloc[0:0].copy()
@@ -312,6 +322,11 @@ def _menu_permitido_por_perfil():
 
 
 _renderizar_login_sistema()
+
+_perfil_validado_seguro = _perfil_logado()
+if _perfil_validado_seguro not in {"Administrador", "Comprador", "Vendedor", "Gerente"}:
+    st.error("Perfil de acesso inválido.")
+    st.stop()
 
 
 st.markdown(
@@ -7157,11 +7172,21 @@ if PERIODO_REALIZADO_USADO != PERIODO_DASHBOARD:
         f"{PERIODO_REALIZADO_USADO}. As metas continuam sendo as de {PERIODO_DASHBOARD}. "
         "Atualize o mês no módulo Banco de Dados para substituir o realizado provisório."
     )
-# Segurança final: todas as visões operacionais exibem somente compradores ativos.
+# Segurança final: primeiro remove compradores inativos.
 REALIZADOS = filtrar_dataframe_compradores_ativos(REALIZADOS)
 METAS = filtrar_dataframe_compradores_ativos(METAS)
 RESULTADO = filtrar_dataframe_compradores_ativos(RESULTADO)
 PREMIO = filtrar_dataframe_compradores_ativos(PREMIO)
+
+# SEGURANÇA CENTRALIZADA POR USUÁRIO.
+# A partir daqui, perfis restritos não carregam dados de terceiros
+# para telas, cards, gráficos ou exportações.
+if _perfil_logado() != "Administrador":
+    REALIZADOS = _filtrar_df_por_usuario_logado(REALIZADOS)
+    METAS = _filtrar_df_por_usuario_logado(METAS)
+    RESULTADO = _filtrar_df_por_usuario_logado(RESULTADO)
+    PREMIO = _filtrar_df_por_usuario_logado(PREMIO)
+    PREMIO_KPI = _filtrar_objeto_por_usuario_logado(PREMIO_KPI)
 
 # Filtros e seletores seguem os compradores reconhecidos nas bases do período.
 COMPRADORES = sorted(
@@ -7406,6 +7431,9 @@ with st.sidebar:
     elif perfil_atual == "Vendedor":
         comprador = "Todos"
         st.info(f"🔒 Vendedor: {_escopo_usuario_logado()}")
+    elif perfil_atual == "Gerente":
+        comprador = "Todos"
+        st.info(f"🔒 Gerente: {_escopo_usuario_logado()}")
     else:
         comprador = st.selectbox("Comprador", ["Todos"] + COMPRADORES)
 
@@ -7429,6 +7457,10 @@ with st.sidebar:
     st.caption("Rede Economize • Enterprise")
 
 iniciar_contexto_exportacao(visao, METAS_GESTOR.get("periodo_referencia", "-"))
+st.session_state["_escopo_exportacao_usuario"] = {
+    "perfil": _perfil_logado(),
+    "escopo": _escopo_usuario_logado(),
+}
 
 if MODO_VIEWER and visao in {
     "Metas e Parâmetros", "Metas de Loja", "Gestão de Metas",
@@ -9130,6 +9162,10 @@ elif visao == "Prêmio Comprador":
     )
 
     st.caption("As colunas Prêmio representam valores em reais; as colunas Realizado representam o percentual de atingimento de cada KPI.")
+    if _perfil_logado() != "Administrador":
+        st.caption("🔒 Esta tela está limitada exclusivamente à sua própria premiação.")
+        st.stop()
+
     st.markdown("### Gerente Comercial")
     gerente = pd.DataFrame([[
         "Gerente Comercial", 14.95, 99.7, 15.00, 100.0, 48.96, 97.9,
@@ -9145,6 +9181,32 @@ elif visao == "Prêmio Comprador":
     )
 
 elif visao == "Prêmio por KPI":
+    if _perfil_logado() == "Comprador":
+        _nome_kpi_privado = _escopo_usuario_logado()
+        _detalhe_kpi_privado = _kpis_holerite_comprador(_nome_kpi_privado)
+        st.markdown("### 🔒 Minha Premiação por KPI")
+        if _detalhe_kpi_privado.empty:
+            st.info("Não há premiação por KPI calculada para seu usuário nesta competência.")
+        else:
+            _cols_priv = [
+                c for c in [
+                    "KPI", "Meta", "Realizado", "Atingimento (%)",
+                    "Peso (%)", "Prêmio máximo", "Prêmio conquistado",
+                    "Saldo não conquistado"
+                ] if c in _detalhe_kpi_privado.columns
+            ]
+            dataframe_br(
+                _detalhe_kpi_privado[_cols_priv],
+                use_container_width=True,
+                hide_index=True,
+                export_title=f"Minha Premiação por KPI - {_nome_kpi_privado}",
+            )
+        st.caption("🔒 Nenhum KPI ou valor de outro comprador é exibido.")
+        st.stop()
+    elif _perfil_logado() in {"Gerente", "Vendedor"}:
+        st.info("Esta visão consolidada não está disponível para este perfil.")
+        st.stop()
+
     _render_premium_header("💰", "Premiação por KPI", "Composição do prêmio máximo, atingimento e valor conquistado em cada indicador.")
     premio_maximo_kpi = float(pd.to_numeric(PREMIO_KPI["Prêmio por KPI atingível"], errors="coerce").fillna(0).sum())
     premio_atingido_kpi = float(pd.to_numeric(PREMIO_KPI["Prêmio Atingido"], errors="coerce").fillna(0).sum())
@@ -9323,6 +9385,14 @@ elif visao == "Portal de Premiação":
 
 elif visao == "Holerite da Premiação":
     compradores_holerite = _premio_total_por_comprador()["Comprador"].tolist()
+    if _perfil_logado() == "Comprador":
+        _meu_comprador_holerite = _escopo_usuario_logado()
+        compradores_holerite = [
+            x for x in compradores_holerite
+            if _norm_escopo(x) == _norm_escopo(_meu_comprador_holerite)
+        ]
+    elif _perfil_logado() != "Administrador":
+        compradores_holerite = []
     if not compradores_holerite:
         section("Holerite Analítico da Premiação", "sec-gold")
         st.info("Sem compradores com premiação calculada.")
@@ -9336,12 +9406,21 @@ elif visao == "Holerite da Premiação":
 
         padrao = comprador if comprador in compradores_holerite else compradores_holerite[0]
         f_comp, f_periodo = st.columns([1.35, 1])
-        nome = f_comp.selectbox(
-            "Comprador",
-            compradores_holerite,
-            index=compradores_holerite.index(padrao),
-            key="comprador_holerite",
-        )
+        if _perfil_logado() == "Comprador":
+            nome = compradores_holerite[0]
+            f_comp.text_input(
+                "Comprador",
+                value=nome,
+                disabled=True,
+                key="comprador_holerite_privado",
+            )
+        else:
+            nome = f_comp.selectbox(
+                "Comprador",
+                compradores_holerite,
+                index=compradores_holerite.index(padrao),
+                key="comprador_holerite",
+            )
         f_periodo.text_input(
             "Competência",
             value=str(PERIODO_REALIZADO_USADO),
@@ -9562,10 +9641,31 @@ elif visao == "Holerite da Loja":
 
 elif visao == "Holerite do Gerente Comercial":
     hol_lojas = _holerite_lojas_por_meta(PERIODO_REALIZADO_USADO); hol_ger = _holerite_gerentes_por_meta(PERIODO_REALIZADO_USADO)
+    if _perfil_logado() == "Gerente":
+        _gerente_privado = _escopo_usuario_logado()
+        if not hol_ger.empty and "Gerente Comercial" in hol_ger.columns:
+            hol_ger = hol_ger.loc[
+                hol_ger["Gerente Comercial"].map(_norm_escopo).eq(_norm_escopo(_gerente_privado))
+            ].copy()
+        else:
+            hol_ger = pd.DataFrame()
+        if not hol_lojas.empty and "Gerente Comercial" in hol_lojas.columns:
+            hol_lojas = hol_lojas.loc[
+                hol_lojas["Gerente Comercial"].map(_norm_escopo).eq(_norm_escopo(_gerente_privado))
+            ].copy()
+    elif _perfil_logado() != "Administrador":
+        hol_ger = pd.DataFrame()
+        hol_lojas = pd.DataFrame()
     st.markdown(f'<div class="hp-title-wrap"><div><div class="hp-title">👔 Holerite do Gerente Comercial</div><div class="hp-subtitle">Consolidação das metas e premiações das lojas sob sua responsabilidade</div></div><div class="hp-update">Atualizado em: {datetime.now():%d/%m/%Y %H:%M:%S} ⟳</div></div>',unsafe_allow_html=True)
     if hol_ger.empty: st.info("Não existem metas e realizado suficientes para montar o holerite gerencial.")
     else:
-        f1,f2=st.columns([1.2,1]); gerente_nome=f1.selectbox("Gerente Comercial",hol_ger["Gerente Comercial"].astype(str).tolist(),key="holerite_gerente_selecionado"); f2.text_input("Competência",value=str(PERIODO_REALIZADO_USADO),disabled=True,key="hp_comp_ger")
+        f1,f2=st.columns([1.2,1])
+        if _perfil_logado() == "Gerente":
+            gerente_nome = str(hol_ger["Gerente Comercial"].iloc[0])
+            f1.text_input("Gerente Comercial", value=gerente_nome, disabled=True, key="holerite_gerente_privado")
+        else:
+            gerente_nome=f1.selectbox("Gerente Comercial",hol_ger["Gerente Comercial"].astype(str).tolist(),key="holerite_gerente_selecionado")
+        f2.text_input("Competência",value=str(PERIODO_REALIZADO_USADO),disabled=True,key="hp_comp_ger")
         g=hol_ger.loc[hol_ger["Gerente Comercial"].astype(str)==str(gerente_nome)].iloc[0]; ating_fat=g["Realizado Faturamento (R$)"]/g["Meta Faturamento (R$)"]*100 if g["Meta Faturamento (R$)"] else 0.0; ating_mb=g["Realizado Margem Bruta (R$)"]/g["Meta Margem Bruta (R$)"]*100 if g["Meta Margem Bruta (R$)"] else 0.0; ating_geral=g["Prêmio conquistado (R$)"]/g["Prêmio máximo (R$)"]*100 if g["Prêmio máximo (R$)"] else 0.0
         cards=st.columns(5); cards[0].markdown(_html_card_premiacao("🏆","Prêmio Máximo",moeda_real(g["Prêmio máximo (R$)"]),f"{numero_inteiro(g['Lojas'])} lojas", "hp-blue-icon"),unsafe_allow_html=True); cards[1].markdown(_html_card_premiacao("🥇","Prêmio Conquistado",moeda_real(g["Prêmio conquistado (R$)"]),"Valor consolidado", "hp-green-icon"),unsafe_allow_html=True); cards[2].markdown(_html_card_premiacao("🎯","Atingimento Geral",percentual(ating_geral),"Percentual sobre o total", "hp-purple-icon"),unsafe_allow_html=True); cards[3].markdown(_html_card_premiacao("⬇","Saldo não Conquistado",moeda_real(g["Saldo não conquistado (R$)"]),"Valor que deixou de ganhar", "hp-red-icon","hp-red"),unsafe_allow_html=True); cards[4].markdown(_html_card_premiacao("🏬","Lojas Gerenciadas",numero_inteiro(g["Lojas"]),f"{numero_inteiro(g['Supervisores'])} supervisores", "hp-gold-icon"),unsafe_allow_html=True)
         kpis_ger=[{"KPI":"Faturamento","Tipo":"Valor (R$)","Meta":float(g["Meta Faturamento (R$)"]),"Realizado":float(g["Realizado Faturamento (R$)"]),"Atingimento (%)":ating_fat,"Peso (%)":50.0,"Parcela máxima (R$)":float(g["Prêmio máximo (R$)"])*.5,"Parcela conquistada (R$)":float(g["Prêmio máximo (R$)"])*.5*min(max(ating_fat,0),100)/100},{"KPI":"Margem Bruta","Tipo":"Valor (R$)","Meta":float(g["Meta Margem Bruta (R$)"]),"Realizado":float(g["Realizado Margem Bruta (R$)"]),"Atingimento (%)":ating_mb,"Peso (%)":50.0,"Parcela máxima (R$)":float(g["Prêmio máximo (R$)"])*.5,"Parcela conquistada (R$)":float(g["Prêmio máximo (R$)"])*.5*min(max(ating_mb,0),100)/100}]

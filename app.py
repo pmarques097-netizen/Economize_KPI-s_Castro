@@ -26,6 +26,7 @@ import traceback
 import shutil
 import gzip
 import subprocess
+import os
 
 try:
     from openpyxl import Workbook
@@ -1209,7 +1210,7 @@ def card_status_base(titulo, registros):
 def contar_registros_cache(tabela, periodo=None):
     """Conta os registros reais no SQLite para o período selecionado."""
     try:
-        with sqlite3.connect(CACHE_DB_FILE, timeout=30) as con:
+        with conexao_cache() as con:
             existe = con.execute(
                 "SELECT 1 FROM sqlite_master "
                 "WHERE type='table' AND name=?",
@@ -2596,7 +2597,7 @@ def carregar_realizado_filiais_ceo(periodo, token_cache):
     """Agrega faturamento e margem bruta por filial diretamente no SQLite."""
     colunas = ["numero_loja", "loja", "faturamento_atual", "margem_bruta_atual"]
     try:
-        with sqlite3.connect(CACHE_DB_FILE, timeout=30) as con:
+        with conexao_cache() as con:
             tabelas = {linha[0] for linha in con.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()}
@@ -2813,32 +2814,82 @@ DB_CONFIG_FILE = CONFIG_DIR / "database.json"
 CACHE_DB_FILE = DATA_DIR / "kpis_mensal.sqlite"
 CACHE_DB_GZ_FILE = DATA_DIR / "kpis_mensal.sqlite.gz"
 
-def _preparar_sqlite_publicado():
-    """Descompacta e valida a base publicada antes de o Viewer usá-la."""
-    if not CACHE_DB_GZ_FILE.exists():
-        return
-    precisa = not CACHE_DB_FILE.exists()
-    if not precisa:
-        try:
-            precisa = CACHE_DB_GZ_FILE.stat().st_mtime > CACHE_DB_FILE.stat().st_mtime
-        except Exception:
-            precisa = True
-    if not precisa:
-        return
+# Viewer: o banco publicado nunca é aberto diretamente no checkout do Streamlit.
+# Cada instância trabalha com uma cópia runtime validada em /tmp.
+VIEWER_RUNTIME_DIR = Path("/tmp/eirox_kpi_viewer")
+VIEWER_RUNTIME_DB_FILE = VIEWER_RUNTIME_DIR / "kpis_mensal.sqlite"
+VIEWER_RUNTIME_META_FILE = VIEWER_RUNTIME_DIR / "kpis_mensal.runtime.json"
 
-    tmp = CACHE_DB_FILE.with_suffix(".tmp.sqlite")
-    tmp.unlink(missing_ok=True)
-    with gzip.open(CACHE_DB_GZ_FILE, "rb") as origem, tmp.open("wb") as destino:
-        shutil.copyfileobj(origem, destino, length=1024 * 1024)
+def _assinatura_sqlite_publicado():
+    origem = CACHE_DB_GZ_FILE if CACHE_DB_GZ_FILE.exists() else CACHE_DB_FILE
+    if not origem.exists():
+        return origem, "ausente"
+    stat = origem.stat()
+    return origem, f"{origem.name}|{stat.st_size}|{stat.st_mtime_ns}"
 
-    con = sqlite3.connect(tmp, timeout=30)
+def _validar_sqlite_arquivo(caminho):
+    con = sqlite3.connect(str(caminho), timeout=60)
     try:
         check = con.execute("PRAGMA quick_check").fetchone()
-        if not check or str(check[0]).lower() != "ok":
+        if not check or str(check[0]).strip().lower() != "ok":
             raise RuntimeError(f"SQLite publicado inválido: {check}")
     finally:
         con.close()
-    tmp.replace(CACHE_DB_FILE)
+
+def _preparar_sqlite_publicado(forcar=False):
+    """Materializa o SQLite publicado em /tmp, valida e publica atomicamente.
+
+    No Viewer o arquivo dentro de data/ é somente uma origem publicada. A navegação
+    lê exclusivamente a cópia runtime, evitando troca do arquivo sob consultas ativas.
+    """
+    if not MODO_VIEWER:
+        return CACHE_DB_FILE
+
+    origem, assinatura = _assinatura_sqlite_publicado()
+    if assinatura == "ausente":
+        raise FileNotFoundError(
+            f"Base publicada não encontrada: {CACHE_DB_GZ_FILE} nem {CACHE_DB_FILE}"
+        )
+
+    VIEWER_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    if not forcar and VIEWER_RUNTIME_DB_FILE.exists() and VIEWER_RUNTIME_META_FILE.exists():
+        try:
+            meta = json.loads(VIEWER_RUNTIME_META_FILE.read_text(encoding="utf-8"))
+            if meta.get("assinatura") == assinatura and VIEWER_RUNTIME_DB_FILE.stat().st_size > 0:
+                return VIEWER_RUNTIME_DB_FILE
+        except Exception:
+            pass
+
+    nonce = f"{os.getpid()}_{time.time_ns()}" if "os" in globals() else str(time.time_ns())
+    tmp = VIEWER_RUNTIME_DIR / f"kpis_mensal.{nonce}.tmp.sqlite"
+    tmp_meta = VIEWER_RUNTIME_DIR / f"kpis_mensal.{nonce}.tmp.json"
+    tmp.unlink(missing_ok=True)
+    tmp_meta.unlink(missing_ok=True)
+    try:
+        if origem == CACHE_DB_GZ_FILE:
+            with gzip.open(origem, "rb") as entrada, tmp.open("wb") as destino:
+                shutil.copyfileobj(entrada, destino, length=1024 * 1024)
+        else:
+            shutil.copy2(origem, tmp)
+
+        _validar_sqlite_arquivo(tmp)
+        tmp.replace(VIEWER_RUNTIME_DB_FILE)
+        tmp_meta.write_text(
+            json.dumps({
+                "assinatura": assinatura,
+                "origem": str(origem),
+                "preparado_em": datetime.now().isoformat(timespec="seconds"),
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        tmp_meta.replace(VIEWER_RUNTIME_META_FILE)
+        return VIEWER_RUNTIME_DB_FILE
+    finally:
+        tmp.unlink(missing_ok=True)
+        tmp_meta.unlink(missing_ok=True)
+
+def _arquivo_sqlite_leitura():
+    return _preparar_sqlite_publicado() if MODO_VIEWER else CACHE_DB_FILE
 
 _preparar_sqlite_publicado()
 
@@ -3348,10 +3399,14 @@ def salvar_sql(caminho, conteudo):
     caminho.write_text(conteudo.strip() + "\n", encoding="utf-8")
 
 def conexao_cache():
-    # Viewer usa SQLite somente leitura durante a navegacao.
+    # Viewer usa exclusivamente a cópia runtime validada e imutável.
     if MODO_VIEWER:
-        caminho = CACHE_DB_FILE.resolve().as_posix()
-        con = sqlite3.connect(f"file:{caminho}?mode=ro", uri=True, timeout=30)
+        caminho = _arquivo_sqlite_leitura().resolve().as_posix()
+        con = sqlite3.connect(
+            f"file:{caminho}?mode=ro&immutable=1",
+            uri=True,
+            timeout=30,
+        )
         try:
             con.execute("PRAGMA query_only=ON")
             con.execute("PRAGMA busy_timeout=30000")
@@ -5608,7 +5663,7 @@ def carregar_auditoria_categorias(periodo_referencia, token_banco, token_mapa):
             item["fontes"].add(fonte)
 
     try:
-        with sqlite3.connect(CACHE_DB_FILE, timeout=30) as con:
+        with conexao_cache() as con:
             tabelas = {
                 r[0] for r in con.execute(
                     "SELECT name FROM sqlite_master WHERE type='table'"
@@ -7114,7 +7169,7 @@ def _html_tabela_holerite(kpis, total_maximo, total_conquistado, total_saldo, at
 
 def _evolucao_diaria_holerite_loja(periodo, loja, meta_faturamento):
     try:
-        with sqlite3.connect(CACHE_DB_FILE, timeout=30) as con:
+        with conexao_cache() as con:
             cols = _colunas_tabela_cache(con, "base_vendas")
             col_loja = next((c for c in ["numero_loja", "loja", "unidade_negocio", "unidade", "filial"] if c in cols), None)
             col_data = next((c for c in ["datahora_venda_final", "data_venda", "datahora", "data"] if c in cols), None)
@@ -7238,9 +7293,8 @@ st.session_state["periodo_gestao_unificado_global"] = PERIODO_GLOBAL_SELECIONADO
 
 PERIODO_DASHBOARD = PERIODO_GLOBAL_SELECIONADO
 _TOKEN_VISOES = _arquivo_token(
-    CACHE_DB_FILE,
-    Path(str(CACHE_DB_FILE) + "-wal"),
-    Path(str(CACHE_DB_FILE) + "-shm"),
+    _arquivo_sqlite_leitura(),
+    CACHE_DB_GZ_FILE,
     RUPTURA_AUTO_DB,
     Path(str(RUPTURA_AUTO_DB) + "-wal"),
     Path(str(RUPTURA_AUTO_DB) + "-shm"),
@@ -7298,7 +7352,7 @@ COMPRADORES = sorted(
 @st.cache_data(ttl=600, show_spinner=False, max_entries=8)
 def _ler_cache_analise_cached(tabela, token):
     try:
-        with sqlite3.connect(CACHE_DB_FILE, timeout=30) as con:
+        with conexao_cache() as con:
             existe = con.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
                 (tabela,),
@@ -7972,20 +8026,14 @@ elif visao == "Análise Comercial":
     cfg_analise = carregar_config_analise_comercial()
     st.caption("⚡ Modo rápido: a tela utiliza resumos persistentes, sem carregar os movimentos brutos.")
 
-    token_analise = _arquivo_token(CACHE_DB_FILE)
+    token_analise = _arquivo_token(_arquivo_sqlite_leitura(), CACHE_DB_GZ_FILE)
 
     @st.cache_data(ttl=3600, show_spinner=False, max_entries=12)
     def _carregar_resumos_analise(token):
-        with conexao_cache() as con_preparo:
-            garantir_tabelas_analise(con_preparo)
-        with sqlite3.connect(CACHE_DB_FILE, timeout=30) as con:
-            reconstruir_posicoes_mensais(con)
+        with conexao_cache() as con:
             tabelas = {r[0] for r in con.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()}
-            # Compatibilidade: se o projeto ainda não tiver os resumos,
-            # cria uma única vez. Nas próximas atualizações eles são mantidos
-            # automaticamente por período.
             obrigatorias = {
                 "analise_vendas_resumo",
                 "analise_entradas_resumo",
@@ -7995,7 +8043,12 @@ elif visao == "Análise Comercial":
                 "analise_posicao_resumo",
             }
             if not obrigatorias.issubset(tabelas):
-                atualizar_resumos_analise(con)
+                faltantes = sorted(obrigatorias - tabelas)
+                raise RuntimeError(
+                    "O SQLite publicado não contém todos os resumos da Análise Comercial: "
+                    + ", ".join(faltantes)
+                    + ". Atualize/publice a base pelo Atualizador Local."
+                )
 
             vendas = pd.read_sql_query(
                 "SELECT periodo_referencia, classificacao, venda, custo FROM analise_vendas_resumo",
@@ -8372,19 +8425,15 @@ elif visao == "Análise Comercial":
     with ac_btn:
         if MODO_VIEWER:
             atualizar_analise_clicado = st.button(
-                "🔄 Reconstruir análise",
+                "🔄 Recarregar base publicada",
                 key=f"reconstruir_evolucao_{ano_selecionado}",
                 use_container_width=True,
-                help="Reconstrói os resumos usando somente o SQLite publicado. Não acessa o PostgreSQL.",
+                help="Recarrega o .gz publicado, valida com quick_check e substitui atomicamente a cópia runtime. Não acessa o PostgreSQL.",
             )
             if atualizar_analise_clicado:
                 try:
-                    with st.spinner("Reconstruindo resumos da base publicada..."):
-                        with sqlite3.connect(CACHE_DB_FILE, timeout=60) as con_rebuild:
-                            garantir_tabelas_analise(con_rebuild)
-                            atualizar_resumos_analise(con_rebuild)
-                            reconstruir_posicoes_mensais(con_rebuild)
-                            con_rebuild.commit()
+                    with st.spinner("Recarregando e validando a base publicada..."):
+                        _preparar_sqlite_publicado(forcar=True)
                         try:
                             _carregar_resumos_analise.clear()
                         except Exception:
@@ -8394,10 +8443,10 @@ elif visao == "Análise Comercial":
                         except Exception:
                             pass
                         st.cache_data.clear()
-                    st.success("Análise reconstruída com os dados já publicados no Viewer.")
+                    st.success("Base publicada recarregada e validada no Viewer.")
                     st.rerun()
                 except Exception as erro:
-                    st.error("Não foi possível reconstruir a análise a partir do SQLite publicado.")
+                    st.error("Não foi possível recarregar a base SQLite publicada.")
                     st.code(str(erro), language=None)
         else:
             if st.button(

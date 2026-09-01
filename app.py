@@ -1751,16 +1751,59 @@ def renderizar_exportacao_tela():
             return alvo ? alvo.closest('[data-testid="stElementContainer"]') : null;
         }
 
-        async function imprimirTelaKPI() {
-            const topWindow = window.top;
-            const topDocument = topWindow.document;
-            const mainOriginal = topDocument.querySelector('[data-testid="stMainBlockContainer"]')
-                || topDocument.querySelector('.main .block-container');
+        function localizarContextoStreamlit() {
+            const candidatos = [];
+            let atual = window;
 
-            if (!mainOriginal) {
-                alert('Não foi possível localizar a apresentação atual.');
+            // O components.html roda dentro de iframe. No Streamlit Cloud a árvore
+            // pode ganhar níveis extras, então não assumimos mais window.top.
+            for (let i = 0; i < 8; i += 1) {
+                try {
+                    if (atual && !candidatos.includes(atual)) candidatos.push(atual);
+                    if (!atual.parent || atual.parent === atual) break;
+                    atual = atual.parent;
+                } catch (e) {
+                    break;
+                }
+            }
+            try {
+                if (window.top && !candidatos.includes(window.top)) candidatos.push(window.top);
+            } catch (e) {}
+
+            const seletores = [
+                '[data-testid="stMainBlockContainer"]',
+                '[data-testid="stMain"] [data-testid="stMainBlockContainer"]',
+                '.main .block-container',
+                '.stMain .block-container',
+                '[data-testid="stMain"]',
+                'section.main'
+            ];
+
+            for (const win of candidatos) {
+                try {
+                    const doc = win.document;
+                    if (!doc || !doc.documentElement) continue;
+                    for (const seletor of seletores) {
+                        const main = doc.querySelector(seletor);
+                        if (main) return { win, doc, main, seletor };
+                    }
+                } catch (e) {
+                    // Ignora somente frames sem acesso e continua procurando.
+                }
+            }
+            return null;
+        }
+
+        async function imprimirTelaKPI() {
+            const contexto = localizarContextoStreamlit();
+            if (!contexto) {
+                alert('Não foi possível localizar a área principal do Streamlit para gerar o PDF. Atualize a página e tente novamente.');
                 return;
             }
+
+            const topWindow = contexto.win;
+            const topDocument = contexto.doc;
+            const mainOriginal = contexto.main;
 
             const botao = document.getElementById('btnImprimirKPI');
             const textoOriginal = botao.textContent;

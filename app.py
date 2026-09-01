@@ -2976,7 +2976,13 @@ def carregar_totais_cards_diretos(periodo, token_dados=None):
         "faturamento": 0.0, "cmv": 0.0, "estoque": 0.0,
         "entradas": 0.0, "ruptura": 0.0, "reposicao": 0.0,
     }
-    if not CACHE_DB_FILE.exists():
+    # No Viewer, a leitura deve usar exclusivamente a cópia runtime validada.
+    # Não testar CACHE_DB_FILE diretamente, pois ele é apenas a origem publicada.
+    try:
+        arquivo_leitura = _arquivo_sqlite_leitura()
+        if not Path(arquivo_leitura).exists():
+            return totais
+    except Exception:
         return totais
 
     def cols(con, tabela):
@@ -2985,7 +2991,7 @@ def carregar_totais_cards_diretos(periodo, token_dados=None):
         except Exception:
             return set()
 
-    with sqlite3.connect(CACHE_DB_FILE, timeout=30) as con:
+    with conexao_cache() as con:
         tabelas = {r[0] for r in con.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         )}

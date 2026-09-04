@@ -8014,15 +8014,24 @@ else:
     reposicao = float(pd.to_numeric(REALIZADOS.get("Entradas CUSTO", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
     _meta_dashboard = float(pd.to_numeric(METAS.get("Faturamento Total META", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
 
-st.markdown(f"""
-<div class="kpi-grid">
-  <div class="kpi-card"><div class="label">Faturamento Total</div><div class="value">{moeda_real(fat)}</div><div class="sub">Meta: {moeda_real(_meta_dashboard)}</div></div>
-  <div class="kpi-card"><div class="label">CMV Atual</div><div class="value">R$ {moeda(cmv)}</div><div class="sub">CMV das lojas do escopo</div></div>
-  <div class="kpi-card"><div class="label">Estoque Total</div><div class="value">R$ {moeda(estoque)}</div><div class="sub">Estoque das lojas do escopo</div></div>
-  <div class="kpi-card"><div class="label">Ruptura Ativa</div><div class="value">{moeda_real(ruptura)}</div><div class="sub">Meta operacional: {percentual(METAS_GESTOR["meta_ruptura"])}</div></div>
-  <div class="kpi-card"><div class="label">Reposição CMV</div><div class="value">{percentual(reposicao)}</div><div class="sub">Meta: {percentual(METAS_GESTOR["meta_reposicao"])}</div></div>
-</div>
-""", unsafe_allow_html=True)
+if _PERFIL_DASH == "Gerente":
+    st.markdown(f"""
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));">
+      <div class="kpi-card"><div class="label">Faturamento Total</div><div class="value">{moeda_real(fat)}</div><div class="sub">Meta: {moeda_real(_meta_dashboard)}</div></div>
+      <div class="kpi-card"><div class="label">CMV Atual</div><div class="value">R$ {moeda(cmv)}</div><div class="sub">CMV das lojas do escopo</div></div>
+      <div class="kpi-card"><div class="label">Reposição CMV</div><div class="value">{percentual(reposicao)}</div><div class="sub">Meta: {percentual(METAS_GESTOR["meta_reposicao"])}</div></div>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown(f"""
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="label">Faturamento Total</div><div class="value">{moeda_real(fat)}</div><div class="sub">Meta: {moeda_real(_meta_dashboard)}</div></div>
+      <div class="kpi-card"><div class="label">CMV Atual</div><div class="value">R$ {moeda(cmv)}</div><div class="sub">CMV das lojas do escopo</div></div>
+      <div class="kpi-card"><div class="label">Estoque Total</div><div class="value">R$ {moeda(estoque)}</div><div class="sub">Estoque das lojas do escopo</div></div>
+      <div class="kpi-card"><div class="label">Ruptura Ativa</div><div class="value">{moeda_real(ruptura)}</div><div class="sub">Meta operacional: {percentual(METAS_GESTOR["meta_ruptura"])}</div></div>
+      <div class="kpi-card"><div class="label">Reposição CMV</div><div class="value">{percentual(reposicao)}</div><div class="sub">Meta: {percentual(METAS_GESTOR["meta_reposicao"])}</div></div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # =========================================================
 # GRÁFICOS EXECUTIVOS

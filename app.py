@@ -184,6 +184,16 @@ def _renderizar_login_sistema():
     if st.session_state.get("_usuario_autenticado"):
         return
 
+    # Carrega a logo dentro da própria rotina de login para não depender
+    # da ordem de inicialização das variáveis globais do arquivo.
+    _login_logo_b64 = ""
+    try:
+        _login_logo_path = Path("assets/logo_rede_economize.png")
+        if _login_logo_path.exists():
+            _login_logo_b64 = base64.b64encode(_login_logo_path.read_bytes()).decode("utf-8")
+    except Exception:
+        _login_logo_b64 = ""
+
     st.markdown("""
     <style>
     [data-testid="stSidebar"]{display:none!important;}
@@ -194,9 +204,9 @@ def _renderizar_login_sistema():
     .login-logo{display:block;max-width:330px;width:72%;height:auto;margin:0 0 18px 0;object-fit:contain}
     </style>
     """ + (
-        f'<div class="login-card"><img class="login-logo" src="data:image/png;base64,{LOGO_ECONOMIZE_B64}" alt="Rede Economize">'
+        f'<div class="login-card"><img class="login-logo" src="data:image/png;base64,{_login_logo_b64}" alt="Rede Economize">'
         '<p>KPI Comercial • Enterprise Edition</p><p>Acesso restrito a usuários autorizados.</p></div>'
-        if LOGO_ECONOMIZE_B64 else
+        if _login_logo_b64 else
         '<div class="login-card"><h1>Rede Economize</h1><p>KPI Comercial • Enterprise Edition</p><p>Acesso restrito a usuários autorizados.</p></div>'
     ), unsafe_allow_html=True)
 

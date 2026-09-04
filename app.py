@@ -72,11 +72,25 @@ MODO_ATUALIZADOR = MODO_APLICACAO == "ATUALIZADOR_LOCAL"
 # CONTROLE DE ACESSO — REDE ECONOMIZE
 # =========================================================
 _USUARIOS_SISTEMA = {
+    # Administradores com visão corporativa completa.
     "paulo": "233fd8bd85b5d4fa7012d66a8d147b8790c1fcfe378210b9a703328e48c55278",
     "vanderlei": "233fd8bd85b5d4fa7012d66a8d147b8790c1fcfe378210b9a703328e48c55278",
     "ubiratan": "233fd8bd85b5d4fa7012d66a8d147b8790c1fcfe378210b9a703328e48c55278",
-    "fabio": "9cc1365d13c8bdba348b9d6ca8ab41672fbb095f464b66ce5fe7c389ea8b783c",
-    "lanila": "37e2a5b868d2437b76aa9351b0c4850b078504299fd3727f2e82749cf8f0bc2a",
+}
+
+# Gerentes fixos do Viewer. Mesmo sendo contas internas, nunca recebem visão
+# corporativa. O campo gerente é usado para filtrar lojas, cards, tabelas e exportações.
+_USUARIOS_GERENTES_SISTEMA = {
+    "fabio": {
+        "senha_hash": "9cc1365d13c8bdba348b9d6ca8ab41672fbb095f464b66ce5fe7c389ea8b783c",
+        "nome": "Fábio",
+        "gerente": "Fábio",
+    },
+    "lanila": {
+        "senha_hash": "37e2a5b868d2437b76aa9351b0c4850b078504299fd3727f2e82749cf8f0bc2a",
+        "nome": "Lanila",
+        "gerente": "Lanila",
+    },
 }
 ACESSOS_COMPRADORES_FILE = Path("config") / "usuarios_compradores.json"
 
@@ -117,6 +131,21 @@ def _dados_acesso_usuario(usuario, senha):
     hash_admin = _USUARIOS_SISTEMA.get(usuario_norm)
     if hash_admin and hmac.compare_digest(senha_hash, hash_admin):
         return {"autorizado": True, "usuario": usuario_norm, "nome": usuario_norm.title(), "perfil": "Administrador", "comprador": "", "vendedor": "", "gerente": ""}
+
+    gerente_sistema = _USUARIOS_GERENTES_SISTEMA.get(usuario_norm)
+    if gerente_sistema:
+        esperado = str(gerente_sistema.get("senha_hash", ""))
+        if esperado and hmac.compare_digest(senha_hash, esperado):
+            gerente_nome = str(gerente_sistema.get("gerente", "") or "").strip()
+            return {
+                "autorizado": True,
+                "usuario": usuario_norm,
+                "nome": str(gerente_sistema.get("nome", "") or gerente_nome or usuario_norm.title()),
+                "perfil": "Gerente",
+                "comprador": "",
+                "vendedor": "",
+                "gerente": gerente_nome,
+            }
 
     for item in _carregar_acessos_compradores():
         if _normalizar_usuario_acesso(item.get("usuario")) != usuario_norm:
@@ -234,8 +263,8 @@ def _renderizar_gestao_acessos_compradores():
             st.error("Informe uma senha para o novo acesso.")
         elif senha and len(str(senha)) < 6:
             st.error("A senha deve ter pelo menos 6 caracteres.")
-        elif usuario_norm in _USUARIOS_SISTEMA:
-            st.error("Esse usuário pertence a um administrador.")
+        elif usuario_norm in _USUARIOS_SISTEMA or usuario_norm in _USUARIOS_GERENTES_SISTEMA:
+            st.error("Esse usuário pertence a uma conta interna do sistema.")
         else:
             conflito = next((x for x in acessos if _normalizar_usuario_acesso(x.get("usuario"))==usuario_norm and str(x.get("comprador","")).casefold()!=str(comprador_sel).casefold()), None)
             if conflito:
@@ -311,6 +340,30 @@ def _filtrar_objeto_por_usuario_logado(obj):
         return {k: v for k, v in obj.items() if _norm_escopo(k) == alvo}
     return obj
 
+def _filtrar_gerente_privado(df, coluna=None):
+    """Filtra DataFrame estritamente para o gerente autenticado.
+
+    Em perfil Gerente, nunca retorna dados de outro gerente. Para Administrador,
+    preserva o DataFrame recebido.
+    """
+    if not isinstance(df, pd.DataFrame):
+        return df
+    if _perfil_logado() != "Gerente":
+        return df
+    gerente = _escopo_usuario_logado()
+    if not gerente:
+        return df.iloc[0:0].copy()
+    candidatos = ([coluna] if coluna else []) + [
+        "Gerente Comercial", "Gerente", "gerente", "gerente_comercial",
+        "Nome Gerente", "nome_gerente"
+    ]
+    col = next((c for c in candidatos if c and c in df.columns), None)
+    if col is None:
+        return df.iloc[0:0].copy()
+    alvo = _norm_escopo(gerente)
+    return df.loc[df[col].map(_norm_escopo).eq(alvo)].copy()
+
+
 def _menu_permitido_por_perfil():
     perfil = _perfil_logado()
     if perfil == "Comprador":
@@ -318,7 +371,9 @@ def _menu_permitido_por_perfil():
     if perfil == "Vendedor":
         return ["📊 Realizados","🌟 Portal de Premiação","🧾 Holerite da Premiação"]
     if perfil == "Gerente":
-        return ["📌 Meu Resumo","🌟 Portal de Premiação","👔 Holerite do Gerente Comercial"]
+        # Perfil gerencial estritamente privado: somente visões do próprio gerente.
+        # Não exibe portais/rankings consolidados da empresa.
+        return ["📌 Meu Resumo","👔 Holerite do Gerente Comercial"]
     return None
 
 
@@ -420,6 +475,24 @@ st.markdown(
 )
 
 _renderizar_login_sistema()
+
+
+def _revalidar_perfil_conta_interna():
+    """Impede que contas gerenciais antigas permaneçam como Administrador na sessão."""
+    usuario = _normalizar_usuario_acesso(st.session_state.get("_usuario_autenticado", ""))
+    gerente_sistema = _USUARIOS_GERENTES_SISTEMA.get(usuario)
+    if gerente_sistema:
+        gerente_nome = str(gerente_sistema.get("gerente", "") or "").strip()
+        st.session_state["_usuario_nome_exibicao"] = str(
+            gerente_sistema.get("nome", "") or gerente_nome or usuario.title()
+        )
+        st.session_state["_usuario_perfil"] = "Gerente"
+        st.session_state["_usuario_comprador"] = ""
+        st.session_state["_usuario_vendedor"] = ""
+        st.session_state["_usuario_gerente"] = gerente_nome
+
+
+_revalidar_perfil_conta_interna()
 
 _perfil_validado_seguro = _perfil_logado()
 if _perfil_validado_seguro not in {"Administrador", "Comprador", "Vendedor", "Gerente"}:
@@ -9412,19 +9485,8 @@ elif visao == "Meu Resumo":
         _hol_lojas = _holerite_lojas_por_meta(PERIODO_REALIZADO_USADO)
         _hol_ger = _holerite_gerentes_por_meta(PERIODO_REALIZADO_USADO)
 
-        if not _hol_ger.empty and "Gerente Comercial" in _hol_ger.columns:
-            _hol_ger = _hol_ger.loc[
-                _hol_ger["Gerente Comercial"].map(_norm_escopo).eq(_norm_escopo(_gerente))
-            ].copy()
-        else:
-            _hol_ger = pd.DataFrame()
-
-        if not _hol_lojas.empty and "Gerente Comercial" in _hol_lojas.columns:
-            _hol_lojas = _hol_lojas.loc[
-                _hol_lojas["Gerente Comercial"].map(_norm_escopo).eq(_norm_escopo(_gerente))
-            ].copy()
-        else:
-            _hol_lojas = pd.DataFrame()
+        _hol_ger = _filtrar_gerente_privado(_hol_ger, "Gerente Comercial")
+        _hol_lojas = _filtrar_gerente_privado(_hol_lojas, "Gerente Comercial")
 
         st.markdown(f"### 👔 {_gerente}")
         st.caption("🔒 Visualização gerencial privada. Somente as lojas vinculadas ao gerente conectado participam dos cálculos.")
@@ -10106,16 +10168,8 @@ elif visao == "Holerite do Gerente Comercial":
     hol_lojas = _holerite_lojas_por_meta(PERIODO_REALIZADO_USADO); hol_ger = _holerite_gerentes_por_meta(PERIODO_REALIZADO_USADO)
     if _perfil_logado() == "Gerente":
         _gerente_privado = _escopo_usuario_logado()
-        if not hol_ger.empty and "Gerente Comercial" in hol_ger.columns:
-            hol_ger = hol_ger.loc[
-                hol_ger["Gerente Comercial"].map(_norm_escopo).eq(_norm_escopo(_gerente_privado))
-            ].copy()
-        else:
-            hol_ger = pd.DataFrame()
-        if not hol_lojas.empty and "Gerente Comercial" in hol_lojas.columns:
-            hol_lojas = hol_lojas.loc[
-                hol_lojas["Gerente Comercial"].map(_norm_escopo).eq(_norm_escopo(_gerente_privado))
-            ].copy()
+        hol_ger = _filtrar_gerente_privado(hol_ger, "Gerente Comercial")
+        hol_lojas = _filtrar_gerente_privado(hol_lojas, "Gerente Comercial")
     elif _perfil_logado() != "Administrador":
         hol_ger = pd.DataFrame()
         hol_lojas = pd.DataFrame()

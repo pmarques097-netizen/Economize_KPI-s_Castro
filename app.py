@@ -3219,6 +3219,181 @@ def carregar_totais_cards_diretos(periodo, token_dados=None):
 
     totais["reposicao"] = (totais["entradas"] / totais["cmv"] * 100.0) if totais["cmv"] else 0.0
     return totais
+
+def _chave_loja_gerencial(valor):
+    texto = _norm_escopo(valor)
+    numeros = re.findall(r"\d+", texto)
+    if numeros:
+        try:
+            return f"N:{int(numeros[-1])}"
+        except Exception:
+            pass
+    texto = re.sub(r"\b(loja|filial|rede|economize|regional)\b", " ", texto)
+    texto = re.sub(r"[^a-z0-9]+", " ", texto)
+    texto = " ".join(texto.split())
+    return f"T:{texto}" if texto else ""
+
+
+def _lojas_permitidas_gerente(periodo, gerente):
+    metas = dataframe_metas_lojas(periodo).copy()
+    if metas.empty or "gerente" not in metas.columns or "regional_loja" not in metas.columns:
+        return set(), pd.DataFrame()
+    alvo = _norm_escopo(gerente)
+    metas = metas.loc[metas["gerente"].map(_norm_escopo).eq(alvo)].copy()
+    metas["chave_loja"] = metas["regional_loja"].map(_chave_loja_gerencial)
+    return {x for x in metas["chave_loja"].tolist() if x}, metas
+
+
+@st.cache_data(ttl=120, show_spinner=False, max_entries=24)
+def carregar_dashboard_lojas_gerente(periodo, gerente, token_dados=None):
+    periodo = str(periodo or "")[:7]
+    chaves, metas = _lojas_permitidas_gerente(periodo, gerente)
+    totais = {
+        "faturamento": 0.0, "cmv": 0.0, "estoque": 0.0,
+        "entradas": 0.0, "ruptura": 0.0, "reposicao": 0.0,
+        "meta_faturamento": 0.0, "meta_margem": 0.0,
+    }
+    detalhe = pd.DataFrame(columns=[
+        "Loja", "Meta Faturamento", "Faturamento", "Margem Bruta",
+        "CMV", "Estoque", "Entradas", "Ruptura", "Reposição CMV %"
+    ])
+    if not chaves or metas.empty:
+        return totais, detalhe
+
+    totais["meta_faturamento"] = float(pd.to_numeric(metas["meta_mes"], errors="coerce").fillna(0).sum())
+    totais["meta_margem"] = float(pd.to_numeric(metas["meta_margem_bruta_valor"], errors="coerce").fillna(0).sum())
+
+    mapa = {}
+    for _, r in metas.iterrows():
+        chave = str(r.get("chave_loja", ""))
+        if chave:
+            mapa[chave] = {
+                "Loja": str(r.get("regional_loja", "")).strip() or chave,
+                "Meta Faturamento": float(pd.to_numeric(r.get("meta_mes", 0), errors="coerce") or 0),
+                "Faturamento": 0.0, "Margem Bruta": 0.0, "CMV": 0.0,
+                "Estoque": 0.0, "Entradas": 0.0, "Ruptura": 0.0,
+            }
+
+    def cols(con, tabela):
+        try:
+            return {r[1] for r in con.execute(f'PRAGMA table_info("{tabela}")')}
+        except Exception:
+            return set()
+
+    def col_loja(cols_t):
+        return next((c for c in [
+            "numero_loja", "loja", "filial", "unidade_negocio", "unidade",
+            "numero_filial", "cod_loja", "codigo_loja"
+        ] if c in cols_t), None)
+
+    def somar_tabela(tabela, exprs):
+        try:
+            with conexao_cache() as con:
+                c = cols(con, tabela)
+                if not c or "periodo_referencia" not in c:
+                    return
+                lc = col_loja(c)
+                if not lc:
+                    return
+                sql = (
+                    f'SELECT COALESCE(CAST("{lc}" AS TEXT),""), ' +
+                    ", ".join(exprs.values()) +
+                    f' FROM "{tabela}" WHERE periodo_referencia=? '
+                    f'GROUP BY COALESCE(CAST("{lc}" AS TEXT),"")'
+                )
+                for row in con.execute(sql, (periodo,)).fetchall():
+                    chave = _chave_loja_gerencial(row[0])
+                    if chave not in mapa:
+                        continue
+                    for i, nome in enumerate(exprs.keys(), start=1):
+                        mapa[chave][nome] += float(row[i] or 0)
+        except Exception:
+            return
+
+    try:
+        with conexao_cache() as con:
+            c = cols(con, "base_vendas")
+        venda_col = next((x for x in ["valortotal", "valor_total", "faturamento", "valor_venda"] if x in c), None)
+        venda_expr = f'COALESCE(SUM(CAST("{venda_col}" AS REAL)),0)' if venda_col else '0'
+        if "custo" in c and "quantidade" in c:
+            cmv_expr = 'COALESCE(SUM(CAST("custo" AS REAL)*CAST("quantidade" AS REAL)),0)'
+        elif "custototal" in c:
+            cmv_expr = 'COALESCE(SUM(CAST("custototal" AS REAL)),0)'
+        else:
+            cmv_expr = '0'
+        margem_expr = 'COALESCE(SUM(CAST("lucro" AS REAL)),0)' if "lucro" in c else f'({venda_expr})-({cmv_expr})'
+        somar_tabela("base_vendas", {"Faturamento": venda_expr, "CMV": cmv_expr, "Margem Bruta": margem_expr})
+    except Exception:
+        pass
+
+    try:
+        with conexao_cache() as con:
+            c = cols(con, "base_estoque")
+        qtd = next((x for x in ["estoque", "saldo_estoque", "quantidade_estoque", "quantidade"] if x in c), None)
+        cmed = next((x for x in ["custo_medio_atual", "custo_medio", "customedio"] if x in c), None)
+        cunit = next((x for x in ["custo_unit_atual", "custo", "custo_unitario"] if x in c), None)
+        if qtd:
+            if cmed and cunit:
+                custo = f'CASE WHEN COALESCE(CAST("{cmed}" AS REAL),0)>0 THEN CAST("{cmed}" AS REAL) ELSE COALESCE(CAST("{cunit}" AS REAL),0) END'
+            elif cmed:
+                custo = f'COALESCE(CAST("{cmed}" AS REAL),0)'
+            elif cunit:
+                custo = f'COALESCE(CAST("{cunit}" AS REAL),0)'
+            else:
+                custo = '0'
+            somar_tabela("base_estoque", {"Estoque": f'COALESCE(SUM(CAST("{qtd}" AS REAL)*({custo})),0)'})
+    except Exception:
+        pass
+
+    try:
+        with conexao_cache() as con:
+            cf = cols(con, "base_entradas_financeira")
+        if cf and "valor_nf_total" in cf:
+            somar_tabela("base_entradas_financeira", {"Entradas": 'COALESCE(SUM(CAST("valor_nf_total" AS REAL)),0)'})
+        else:
+            with conexao_cache() as con:
+                ce = cols(con, "base_entradas")
+            campo = next((x for x in ["valor_nf_total", "entrada_custo_total", "valor_total"] if x in ce), None)
+            if campo:
+                somar_tabela("base_entradas", {"Entradas": f'COALESCE(SUM(CAST("{campo}" AS REAL)),0)'})
+    except Exception:
+        pass
+
+    try:
+        rup = carregar_ruptura_auto(periodo, _arquivo_token(RUPTURA_AUTO_DB, RUPTURA_AUTO_CONTROLE))
+        if not isinstance(rup, pd.DataFrame) or rup.empty:
+            rup = RUPTURA_IMPORTADA.copy() if isinstance(RUPTURA_IMPORTADA, pd.DataFrame) else pd.DataFrame()
+        if isinstance(rup, pd.DataFrame) and not rup.empty:
+            lc = detectar_coluna(rup, ["Loja", "numero_loja", "filial"])
+            rc = detectar_coluna(rup, ["Valor Ruptura", "Ruptura Venda", "Ruptura Ativa", "Ruptura", "valor_ruptura", "ruptura_venda"])
+            if lc and rc:
+                temp = rup[[lc, rc]].copy()
+                temp["_chave"] = temp[lc].map(_chave_loja_gerencial)
+                temp["_valor"] = pd.to_numeric(temp[rc], errors="coerce").fillna(0)
+                for chave, valor in temp.groupby("_chave")["_valor"].sum().items():
+                    if chave in mapa:
+                        mapa[chave]["Ruptura"] += float(valor or 0)
+    except Exception:
+        pass
+
+    detalhe = pd.DataFrame(list(mapa.values()))
+    if detalhe.empty:
+        return totais, detalhe
+
+    detalhe["Reposição CMV %"] = np.where(
+        pd.to_numeric(detalhe["CMV"], errors="coerce").fillna(0) > 0,
+        pd.to_numeric(detalhe["Entradas"], errors="coerce").fillna(0) /
+        pd.to_numeric(detalhe["CMV"], errors="coerce").fillna(0) * 100,
+        0,
+    )
+    totais["faturamento"] = float(pd.to_numeric(detalhe["Faturamento"], errors="coerce").fillna(0).sum())
+    totais["cmv"] = float(pd.to_numeric(detalhe["CMV"], errors="coerce").fillna(0).sum())
+    totais["estoque"] = float(pd.to_numeric(detalhe["Estoque"], errors="coerce").fillna(0).sum())
+    totais["entradas"] = float(pd.to_numeric(detalhe["Entradas"], errors="coerce").fillna(0).sum())
+    totais["ruptura"] = float(pd.to_numeric(detalhe["Ruptura"], errors="coerce").fillna(0).sum())
+    totais["reposicao"] = (totais["entradas"] / totais["cmv"] * 100) if totais["cmv"] else 0.0
+    return totais, detalhe
+
 ANALISE_COMERCIAL_CONFIG_FILE = CONFIG_DIR / "analise_comercial.json"
 PLANO_CONTAS_PAGAMENTO_PADRAO = "Resultado > 03.1 - Despesas Operacionais > 2-CUSTOS VARIAVEIS > 1-C.M.V / DUPL. PAGAS"
 PLANOS_CONTAS_CATALOGO_FILE = CONFIG_DIR / "planos_contas_catalogo.json"
@@ -7796,25 +7971,39 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-if _perfil_logado() == "Administrador":
+_PERFIL_DASH = _perfil_logado()
+_DETALHE_LOJAS_GERENTE = pd.DataFrame()
+if _PERFIL_DASH == "Administrador":
     _TOTAIS_CARDS = carregar_totais_cards_diretos(PERIODO_REALIZADO_USADO, _TOKEN_VISOES)
     fat = float(_TOTAIS_CARDS.get("faturamento", 0.0))
     cmv = float(_TOTAIS_CARDS.get("cmv", 0.0))
     estoque = float(_TOTAIS_CARDS.get("estoque", 0.0))
     ruptura = float(_TOTAIS_CARDS.get("ruptura", 0.0))
     reposicao = float(_TOTAIS_CARDS.get("reposicao", 0.0))
+    _meta_dashboard = float(METAS_GESTOR["meta_venda_total_mes"])
+elif _PERFIL_DASH == "Gerente":
+    _TOTAIS_GER, _DETALHE_LOJAS_GERENTE = carregar_dashboard_lojas_gerente(
+        PERIODO_REALIZADO_USADO, _escopo_usuario_logado(), _TOKEN_VISOES
+    )
+    fat = float(_TOTAIS_GER.get("faturamento", 0.0))
+    cmv = float(_TOTAIS_GER.get("cmv", 0.0))
+    estoque = float(_TOTAIS_GER.get("estoque", 0.0))
+    ruptura = float(_TOTAIS_GER.get("ruptura", 0.0))
+    reposicao = float(_TOTAIS_GER.get("reposicao", 0.0))
+    _meta_dashboard = float(_TOTAIS_GER.get("meta_faturamento", 0.0))
 else:
     fat = float(pd.to_numeric(REALIZADOS.get("Faturamento Total Atual", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
     cmv = float(pd.to_numeric(REALIZADOS.get("CMV mês Atual", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
     estoque = float(pd.to_numeric(REALIZADOS.get("Estoque Total", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
     ruptura = float(pd.to_numeric(REALIZADOS.get("Ruptura Ativa", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
     reposicao = float(pd.to_numeric(REALIZADOS.get("Entradas CUSTO", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    _meta_dashboard = float(pd.to_numeric(METAS.get("Faturamento Total META", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
 
 st.markdown(f"""
 <div class="kpi-grid">
-  <div class="kpi-card"><div class="label">Faturamento Total</div><div class="value">{moeda_real(fat)}</div><div class="sub">Meta: {moeda_real(METAS_GESTOR["meta_venda_total_mes"])}</div></div>
-  <div class="kpi-card"><div class="label">CMV Atual</div><div class="value">R$ {moeda(cmv)}</div><div class="sub">68,9% do faturamento</div></div>
-  <div class="kpi-card"><div class="label">Estoque Total</div><div class="value">R$ {moeda(estoque)}</div><div class="sub">Cobertura consolidada</div></div>
+  <div class="kpi-card"><div class="label">Faturamento Total</div><div class="value">{moeda_real(fat)}</div><div class="sub">Meta: {moeda_real(_meta_dashboard)}</div></div>
+  <div class="kpi-card"><div class="label">CMV Atual</div><div class="value">R$ {moeda(cmv)}</div><div class="sub">CMV das lojas do escopo</div></div>
+  <div class="kpi-card"><div class="label">Estoque Total</div><div class="value">R$ {moeda(estoque)}</div><div class="sub">Estoque das lojas do escopo</div></div>
   <div class="kpi-card"><div class="label">Ruptura Ativa</div><div class="value">{moeda_real(ruptura)}</div><div class="sub">Meta operacional: {percentual(METAS_GESTOR["meta_ruptura"])}</div></div>
   <div class="kpi-card"><div class="label">Reposição CMV</div><div class="value">{percentual(reposicao)}</div><div class="sub">Meta: {percentual(METAS_GESTOR["meta_reposicao"])}</div></div>
 </div>
@@ -7824,157 +8013,213 @@ st.markdown(f"""
 # GRÁFICOS EXECUTIVOS
 # =========================================================
 
-dados_grafico = REALIZADOS.copy()
-metas_grafico = METAS.copy()
-
-if comprador != "Todos":
-    dados_grafico = dados_grafico[dados_grafico["Comprador"] == comprador]
-    metas_grafico = metas_grafico[metas_grafico["Comprador"] == comprador]
-
-col_g1, col_g2 = st.columns([1.1, 0.9], gap="large")
-
-with col_g1:
-    st.markdown("### Faturamento realizado x meta")
-    df_fat = dados_grafico[["Comprador", "Faturamento Total Atual"]].merge(
-        metas_grafico[["Comprador", "Faturamento Total META"]],
-        on="Comprador",
-        how="left"
+if _PERFIL_DASH == "Gerente":
+    st.caption(
+        f"🔒 Indicadores calculados exclusivamente pelas lojas de {_escopo_usuario_logado()} "
+        f"na competência {PERIODO_REALIZADO_USADO}."
     )
-    df_fat = df_fat.melt(
-        id_vars="Comprador",
-        var_name="Indicador",
-        value_name="Valor"
-    )
-    fig_fat = px.bar(
-        df_fat,
-        x="Comprador",
-        y="Valor",
-        color="Indicador",
-        barmode="group",
-        text_auto=False
-    )
-    fig_fat.update_layout(
-        height=350,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font_color="#f3f7fb",
-        margin=dict(l=10, r=10, t=15, b=10),
-        legend_title_text="",
-        yaxis_title="R$",
-        xaxis_title=""
-    )
-    fig_fat.update_yaxes(gridcolor="rgba(255,255,255,.08)")
-    plotly_chart_br(fig_fat, use_container_width=True, config={"displayModeBar": False})
-
-with col_g2:
-    st.markdown("### Composição do estoque")
-    df_curvas = pd.DataFrame({
-        "Curva": ["Curva A", "Curva B", "Curva C", "Curva D"],
-        "Valor": [
-            dados_grafico["Estoque Curva A"].sum(),
-            dados_grafico["Estoque Curva B"].sum(),
-            dados_grafico["Estoque Curva C"].sum(),
-            dados_grafico["Estoque Curva D"].sum(),
-        ]
-    })
-    fig_curvas = px.pie(
-        df_curvas,
-        names="Curva",
-        values="Valor",
-        hole=0.58
-    )
-    fig_curvas.update_traces(textposition="inside", textinfo="percent+label")
-    fig_curvas.update_layout(
-        height=350,
-        paper_bgcolor="rgba(0,0,0,0)",
-        font_color="#f3f7fb",
-        margin=dict(l=10, r=10, t=15, b=10),
-        legend_title_text=""
-    )
-    plotly_chart_br(fig_curvas, use_container_width=True, config={"displayModeBar": False})
-
-col_g3, col_g4 = st.columns(2, gap="large")
-
-with col_g3:
-    st.markdown("### Reposição CMV por comprador")
-    fig_rep = px.bar(
-        dados_grafico.sort_values("Reposição CMV %"),
-        x="Reposição CMV %",
-        y="Comprador",
-        orientation="h",
-        text="Reposição CMV %"
-    )
-    fig_rep.add_vline(
-        x=METAS_GESTOR["meta_reposicao"],
-        line_dash="dash",
-        annotation_text="Meta"
-    )
-    fig_rep.update_traces(
-        text=[
-            percentual(valor)
-            for valor in dados_grafico.sort_values(
-                "Reposição CMV %"
-            )["Reposição CMV %"]
-        ],
-        texttemplate="%{text}",
-        textposition="outside",
-        hovertemplate=(
-            "Comprador=%{y}<br>"
-            "Reposição CMV=%{text}<extra></extra>"
-        ),
-    )
-    fig_rep.update_layout(
-        height=300,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font_color="#f3f7fb",
-        margin=dict(l=10, r=25, t=15, b=10),
-        xaxis_title="Percentual",
-        yaxis_title=""
-    )
-    fig_rep.update_xaxes(gridcolor="rgba(255,255,255,.08)")
-    plotly_chart_br(
-        fig_rep,
-        use_container_width=True,
-        config={"displayModeBar": False},
-        tipo="percentual",
-    )
-
-with col_g4:
-    st.markdown("### Ruptura ativa por comprador")
-    if (
-        not RUPTURA_IMPORTADA.empty
-        and "Comprador" in RUPTURA_IMPORTADA.columns
-        and RUPTURA_IMPORTADA["Comprador"].astype(str).str.strip().ne("").any()
-    ):
-        df_rup = RUPTURA_IMPORTADA.copy()
-        df_rup["Comprador"] = df_rup["Comprador"].astype(str).str.strip()
-        df_rup = (
-            df_rup[df_rup["Comprador"] != ""]
-            .groupby("Comprador", as_index=False)["Ruptura Ativa"]
-            .sum()
-        )
+    _dg = _DETALHE_LOJAS_GERENTE.copy()
+    if _dg.empty:
+        st.info("Não foram encontrados dados operacionais das lojas vinculadas a este gerente.")
     else:
-        df_rup = dados_grafico[["Comprador", "Ruptura Ativa"]].copy()
+        _c1, _c2 = st.columns(2, gap="large")
+        with _c1:
+            st.markdown("### Faturamento realizado x meta por loja")
+            _df = _dg[["Loja", "Faturamento", "Meta Faturamento"]].melt(
+                id_vars="Loja", var_name="Indicador", value_name="Valor"
+            )
+            _fig = px.bar(_df, x="Loja", y="Valor", color="Indicador", barmode="group")
+            _fig.update_layout(height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                               font_color="#f3f7fb", margin=dict(l=10,r=10,t=15,b=10),
+                               legend_title_text="", yaxis_title="R$", xaxis_title="")
+            _fig.update_yaxes(gridcolor="rgba(255,255,255,.08)")
+            plotly_chart_br(_fig, use_container_width=True, config={"displayModeBar": False})
+        with _c2:
+            st.markdown("### Estoque por loja")
+            _est = _dg.sort_values("Estoque", ascending=True)
+            _fig2 = px.bar(_est, x="Estoque", y="Loja", orientation="h")
+            _fig2.update_layout(height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                font_color="#f3f7fb", margin=dict(l=10,r=25,t=15,b=10),
+                                xaxis_title="R$", yaxis_title="")
+            _fig2.update_xaxes(gridcolor="rgba(255,255,255,.08)")
+            plotly_chart_br(_fig2, use_container_width=True, config={"displayModeBar": False})
 
-    fig_rup = px.bar(
-        df_rup.sort_values("Ruptura Ativa"),
-        x="Ruptura Ativa",
-        y="Comprador",
-        orientation="h",
-        text_auto=False
-    )
-    fig_rup.update_layout(
-        height=300,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font_color="#f3f7fb",
-        margin=dict(l=10, r=25, t=15, b=10),
-        xaxis_title="R$",
-        yaxis_title=""
-    )
-    fig_rup.update_xaxes(gridcolor="rgba(255,255,255,.08)")
-    plotly_chart_br(fig_rup, use_container_width=True, config={"displayModeBar": False})
+        _c3, _c4 = st.columns(2, gap="large")
+        with _c3:
+            st.markdown("### Reposição CMV por loja")
+            _rep = _dg.sort_values("Reposição CMV %", ascending=True)
+            _fig3 = px.bar(_rep, x="Reposição CMV %", y="Loja", orientation="h")
+            _fig3.add_vline(x=METAS_GESTOR["meta_reposicao"], line_dash="dash", annotation_text="Meta")
+            _fig3.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                font_color="#f3f7fb", margin=dict(l=10,r=25,t=15,b=10),
+                                xaxis_title="Percentual", yaxis_title="")
+            _fig3.update_xaxes(gridcolor="rgba(255,255,255,.08)")
+            plotly_chart_br(_fig3, use_container_width=True, config={"displayModeBar": False}, tipo="percentual")
+        with _c4:
+            st.markdown("### Ruptura ativa por loja")
+            _rup = _dg.sort_values("Ruptura", ascending=True)
+            _fig4 = px.bar(_rup, x="Ruptura", y="Loja", orientation="h")
+            _fig4.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                font_color="#f3f7fb", margin=dict(l=10,r=25,t=15,b=10),
+                                xaxis_title="R$", yaxis_title="")
+            _fig4.update_xaxes(gridcolor="rgba(255,255,255,.08)")
+            plotly_chart_br(_fig4, use_container_width=True, config={"displayModeBar": False})
+
+        dataframe_br(_dg, use_container_width=True, hide_index=True,
+                     export_title=f"Dashboard Lojas - {_escopo_usuario_logado()}")
+else:
+
+    dados_grafico = REALIZADOS.copy()
+    metas_grafico = METAS.copy()
+
+    if comprador != "Todos":
+        dados_grafico = dados_grafico[dados_grafico["Comprador"] == comprador]
+        metas_grafico = metas_grafico[metas_grafico["Comprador"] == comprador]
+
+    col_g1, col_g2 = st.columns([1.1, 0.9], gap="large")
+
+    with col_g1:
+        st.markdown("### Faturamento realizado x meta")
+        df_fat = dados_grafico[["Comprador", "Faturamento Total Atual"]].merge(
+            metas_grafico[["Comprador", "Faturamento Total META"]],
+            on="Comprador",
+            how="left"
+        )
+        df_fat = df_fat.melt(
+            id_vars="Comprador",
+            var_name="Indicador",
+            value_name="Valor"
+        )
+        fig_fat = px.bar(
+            df_fat,
+            x="Comprador",
+            y="Valor",
+            color="Indicador",
+            barmode="group",
+            text_auto=False
+        )
+        fig_fat.update_layout(
+            height=350,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#f3f7fb",
+            margin=dict(l=10, r=10, t=15, b=10),
+            legend_title_text="",
+            yaxis_title="R$",
+            xaxis_title=""
+        )
+        fig_fat.update_yaxes(gridcolor="rgba(255,255,255,.08)")
+        plotly_chart_br(fig_fat, use_container_width=True, config={"displayModeBar": False})
+
+    with col_g2:
+        st.markdown("### Composição do estoque")
+        df_curvas = pd.DataFrame({
+            "Curva": ["Curva A", "Curva B", "Curva C", "Curva D"],
+            "Valor": [
+                dados_grafico["Estoque Curva A"].sum(),
+                dados_grafico["Estoque Curva B"].sum(),
+                dados_grafico["Estoque Curva C"].sum(),
+                dados_grafico["Estoque Curva D"].sum(),
+            ]
+        })
+        fig_curvas = px.pie(
+            df_curvas,
+            names="Curva",
+            values="Valor",
+            hole=0.58
+        )
+        fig_curvas.update_traces(textposition="inside", textinfo="percent+label")
+        fig_curvas.update_layout(
+            height=350,
+            paper_bgcolor="rgba(0,0,0,0)",
+            font_color="#f3f7fb",
+            margin=dict(l=10, r=10, t=15, b=10),
+            legend_title_text=""
+        )
+        plotly_chart_br(fig_curvas, use_container_width=True, config={"displayModeBar": False})
+
+    col_g3, col_g4 = st.columns(2, gap="large")
+
+    with col_g3:
+        st.markdown("### Reposição CMV por comprador")
+        fig_rep = px.bar(
+            dados_grafico.sort_values("Reposição CMV %"),
+            x="Reposição CMV %",
+            y="Comprador",
+            orientation="h",
+            text="Reposição CMV %"
+        )
+        fig_rep.add_vline(
+            x=METAS_GESTOR["meta_reposicao"],
+            line_dash="dash",
+            annotation_text="Meta"
+        )
+        fig_rep.update_traces(
+            text=[
+                percentual(valor)
+                for valor in dados_grafico.sort_values(
+                    "Reposição CMV %"
+                )["Reposição CMV %"]
+            ],
+            texttemplate="%{text}",
+            textposition="outside",
+            hovertemplate=(
+                "Comprador=%{y}<br>"
+                "Reposição CMV=%{text}<extra></extra>"
+            ),
+        )
+        fig_rep.update_layout(
+            height=300,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#f3f7fb",
+            margin=dict(l=10, r=25, t=15, b=10),
+            xaxis_title="Percentual",
+            yaxis_title=""
+        )
+        fig_rep.update_xaxes(gridcolor="rgba(255,255,255,.08)")
+        plotly_chart_br(
+            fig_rep,
+            use_container_width=True,
+            config={"displayModeBar": False},
+            tipo="percentual",
+        )
+
+    with col_g4:
+        st.markdown("### Ruptura ativa por comprador")
+        if (
+            not RUPTURA_IMPORTADA.empty
+            and "Comprador" in RUPTURA_IMPORTADA.columns
+            and RUPTURA_IMPORTADA["Comprador"].astype(str).str.strip().ne("").any()
+        ):
+            df_rup = RUPTURA_IMPORTADA.copy()
+            df_rup["Comprador"] = df_rup["Comprador"].astype(str).str.strip()
+            df_rup = (
+                df_rup[df_rup["Comprador"] != ""]
+                .groupby("Comprador", as_index=False)["Ruptura Ativa"]
+                .sum()
+            )
+        else:
+            df_rup = dados_grafico[["Comprador", "Ruptura Ativa"]].copy()
+
+        fig_rup = px.bar(
+            df_rup.sort_values("Ruptura Ativa"),
+            x="Ruptura Ativa",
+            y="Comprador",
+            orientation="h",
+            text_auto=False
+        )
+        fig_rup.update_layout(
+            height=300,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#f3f7fb",
+            margin=dict(l=10, r=25, t=15, b=10),
+            xaxis_title="R$",
+            yaxis_title=""
+        )
+        fig_rup.update_xaxes(gridcolor="rgba(255,255,255,.08)")
+        plotly_chart_br(fig_rup, use_container_width=True, config={"displayModeBar": False})
 
 
 st.markdown("### Status das bases do período")

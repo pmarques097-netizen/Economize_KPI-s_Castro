@@ -191,9 +191,14 @@ def _renderizar_login_sistema():
     .login-card{max-width:520px;margin:7vh auto 18px;padding:30px 34px;border-radius:20px;border:1px solid #294b65;background:linear-gradient(145deg,#0d2032,#081724);box-shadow:0 24px 70px rgba(0,0,0,.36)}
     .login-card h1{border:0!important;padding:0!important;margin:0 0 8px!important;font-size:30px!important}
     .login-card p{color:#9fb4c5!important;margin:3px 0!important}
+    .login-logo{display:block;max-width:330px;width:72%;height:auto;margin:0 0 18px 0;object-fit:contain}
     </style>
-    <div class="login-card"><h1>Rede Economize</h1><p>KPI Comercial • Enterprise Edition</p><p>Acesso restrito a usuários autorizados.</p></div>
-    """, unsafe_allow_html=True)
+    """ + (
+        f'<div class="login-card"><img class="login-logo" src="data:image/png;base64,{LOGO_ECONOMIZE_B64}" alt="Rede Economize">'
+        '<p>KPI Comercial • Enterprise Edition</p><p>Acesso restrito a usuários autorizados.</p></div>'
+        if LOGO_ECONOMIZE_B64 else
+        '<div class="login-card"><h1>Rede Economize</h1><p>KPI Comercial • Enterprise Edition</p><p>Acesso restrito a usuários autorizados.</p></div>'
+    ), unsafe_allow_html=True)
 
     a,b,c = st.columns([1.25,1,1.25])
     with b:

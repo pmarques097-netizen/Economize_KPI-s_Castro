@@ -8022,49 +8022,29 @@ if _PERFIL_DASH == "Gerente":
     if _dg.empty:
         st.info("Não foram encontrados dados operacionais das lojas vinculadas a este gerente.")
     else:
-        _c1, _c2 = st.columns(2, gap="large")
-        with _c1:
-            st.markdown("### Faturamento realizado x meta por loja")
-            _df = _dg[["Loja", "Faturamento", "Meta Faturamento"]].melt(
-                id_vars="Loja", var_name="Indicador", value_name="Valor"
-            )
-            _fig = px.bar(_df, x="Loja", y="Valor", color="Indicador", barmode="group")
-            _fig.update_layout(height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                               font_color="#f3f7fb", margin=dict(l=10,r=10,t=15,b=10),
-                               legend_title_text="", yaxis_title="R$", xaxis_title="")
-            _fig.update_yaxes(gridcolor="rgba(255,255,255,.08)")
-            plotly_chart_br(_fig, use_container_width=True, config={"displayModeBar": False})
-        with _c2:
-            st.markdown("### Estoque por loja")
-            _est = _dg.sort_values("Estoque", ascending=True)
-            _fig2 = px.bar(_est, x="Estoque", y="Loja", orientation="h")
-            _fig2.update_layout(height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                                font_color="#f3f7fb", margin=dict(l=10,r=25,t=15,b=10),
-                                xaxis_title="R$", yaxis_title="")
-            _fig2.update_xaxes(gridcolor="rgba(255,255,255,.08)")
-            plotly_chart_br(_fig2, use_container_width=True, config={"displayModeBar": False})
+        st.markdown("### Faturamento realizado x meta por loja")
+        _df = _dg[["Loja", "Faturamento", "Meta Faturamento"]].melt(
+            id_vars="Loja", var_name="Indicador", value_name="Valor"
+        )
+        _fig = px.bar(_df, x="Loja", y="Valor", color="Indicador", barmode="group")
+        _fig.update_layout(height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                           font_color="#f3f7fb", margin=dict(l=10,r=10,t=15,b=10),
+                           legend_title_text="", yaxis_title="R$", xaxis_title="")
+        _fig.update_yaxes(gridcolor="rgba(255,255,255,.08)")
+        plotly_chart_br(_fig, use_container_width=True, config={"displayModeBar": False})
 
-        _c3, _c4 = st.columns(2, gap="large")
-        with _c3:
-            st.markdown("### Reposição CMV por loja")
-            _rep = _dg.sort_values("Reposição CMV %", ascending=True)
-            _fig3 = px.bar(_rep, x="Reposição CMV %", y="Loja", orientation="h")
-            _fig3.add_vline(x=METAS_GESTOR["meta_reposicao"], line_dash="dash", annotation_text="Meta")
-            _fig3.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                                font_color="#f3f7fb", margin=dict(l=10,r=25,t=15,b=10),
-                                xaxis_title="Percentual", yaxis_title="")
-            _fig3.update_xaxes(gridcolor="rgba(255,255,255,.08)")
-            plotly_chart_br(_fig3, use_container_width=True, config={"displayModeBar": False}, tipo="percentual")
-        with _c4:
-            st.markdown("### Ruptura ativa por loja")
-            _rup = _dg.sort_values("Ruptura", ascending=True)
-            _fig4 = px.bar(_rup, x="Ruptura", y="Loja", orientation="h")
-            _fig4.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                                font_color="#f3f7fb", margin=dict(l=10,r=25,t=15,b=10),
-                                xaxis_title="R$", yaxis_title="")
-            _fig4.update_xaxes(gridcolor="rgba(255,255,255,.08)")
-            plotly_chart_br(_fig4, use_container_width=True, config={"displayModeBar": False})
+        st.markdown("### Reposição CMV por loja")
+        _rep = _dg.sort_values("Reposição CMV %", ascending=True)
+        _fig3 = px.bar(_rep, x="Reposição CMV %", y="Loja", orientation="h")
+        _fig3.add_vline(x=METAS_GESTOR["meta_reposicao"], line_dash="dash", annotation_text="Meta")
+        _fig3.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                            font_color="#f3f7fb", margin=dict(l=10,r=25,t=15,b=10),
+                            xaxis_title="Percentual", yaxis_title="")
+        _fig3.update_xaxes(gridcolor="rgba(255,255,255,.08)")
+        plotly_chart_br(_fig3, use_container_width=True, config={"displayModeBar": False}, tipo="percentual")
 
+        # Para o perfil Gerente, estoque e ruptura permanecem disponíveis nos
+        # indicadores/dados internos, mas não são exibidos como gráficos.
         dataframe_br(_dg, use_container_width=True, hide_index=True,
                      export_title=f"Dashboard Lojas - {_escopo_usuario_logado()}")
 else:

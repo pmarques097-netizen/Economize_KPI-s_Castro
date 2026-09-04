@@ -314,11 +314,11 @@ def _filtrar_objeto_por_usuario_logado(obj):
 def _menu_permitido_por_perfil():
     perfil = _perfil_logado()
     if perfil == "Comprador":
-        return ["📊 Realizados","🎯 Métricas Destaque","📈 Resultado Métricas","📋 Resultados dos KPI's","🏆 Prêmio Comprador","💰 Prêmio por KPI","🌟 Portal de Premiação","🧾 Holerite da Premiação"]
+        return ["📌 Meu Resumo","📊 Realizados","🎯 Métricas Destaque","📈 Resultado Métricas","📋 Resultados dos KPI's","🏆 Prêmio Comprador","💰 Prêmio por KPI","🌟 Portal de Premiação","🧾 Holerite da Premiação"]
     if perfil == "Vendedor":
         return ["📊 Realizados","🌟 Portal de Premiação","🧾 Holerite da Premiação"]
     if perfil == "Gerente":
-        return ["🌟 Portal de Premiação","👔 Holerite do Gerente Comercial"]
+        return ["📌 Meu Resumo","🌟 Portal de Premiação","👔 Holerite do Gerente Comercial"]
     return None
 
 
@@ -7571,6 +7571,7 @@ with st.sidebar:
     else:
         opcoes_navegacao = [
             "👔 Resumo CEO",
+            "📌 Meu Resumo",
             "📚 Análise Comercial",
             "📊 Realizados",
             "🎯 Métricas Destaque",
@@ -7596,6 +7597,7 @@ with st.sidebar:
     mapa_visoes = {
         "📌 Metas e Parâmetros": "Metas e Parâmetros",
         "👔 Resumo CEO": "Resumo CEO",
+        "📌 Meu Resumo": "Meu Resumo",
         "📚 Análise Comercial": "Análise Comercial",
         "📊 Realizados": "Realizados",
         "🎯 Métricas Destaque": "Métricas Destaque",
@@ -9319,6 +9321,202 @@ De forma geral, {mes_nome} apresentou saúde comercial classificada como **{nive
         st.info("Ainda não existem competências suficientes para montar a evolução comercial.")
 
     st.caption("Planos de contas aplicados: " + (" | ".join(planos_selecionados) if planos_selecionados else "Nenhum"))
+
+elif visao == "Meu Resumo":
+    section("Meu Resumo", "sec-blue")
+    _perfil_resumo = _perfil_logado()
+    _escopo_resumo = _escopo_usuario_logado()
+
+    st.caption(
+        "Resumo consolidado e seguro do período. Compradores e gerentes visualizam "
+        "exclusivamente os resultados vinculados ao próprio acesso."
+    )
+
+    if _perfil_resumo == "Comprador":
+        _nome = _escopo_resumo
+        _real = REALIZADOS.loc[
+            REALIZADOS["Comprador"].map(_norm_escopo).eq(_norm_escopo(_nome))
+        ].copy() if "Comprador" in REALIZADOS.columns else pd.DataFrame()
+        _meta = METAS.loc[
+            METAS["Comprador"].map(_norm_escopo).eq(_norm_escopo(_nome))
+        ].copy() if "Comprador" in METAS.columns else pd.DataFrame()
+        _prem = PREMIO.loc[
+            PREMIO["Comprador"].map(_norm_escopo).eq(_norm_escopo(_nome))
+        ].copy() if "Comprador" in PREMIO.columns else pd.DataFrame()
+        _kpis = _kpis_holerite_comprador(_nome)
+
+        st.markdown(f"### 👤 {_nome}")
+        st.caption("🔒 Visualização individual. Nenhum total da empresa ou resultado de outro comprador é carregado nesta tela.")
+
+        _r = _real.iloc[0] if not _real.empty else None
+        _m = _meta.iloc[0] if not _meta.empty else None
+
+        def _vlinha(linha, coluna, padrao=0.0):
+            if linha is None or coluna not in linha.index:
+                return padrao
+            try:
+                return float(pd.to_numeric(linha[coluna], errors="coerce"))
+            except Exception:
+                return padrao
+
+        _fat = _vlinha(_r, "Faturamento Total Atual")
+        _fat_meta = _vlinha(_m, "Faturamento Total META")
+        _estoque = _vlinha(_r, "Estoque Total")
+        _ruptura = _vlinha(_r, "Ruptura %")
+        _reposicao = _vlinha(_r, "Reposição CMV %")
+        _premio_total = 0.0
+        if not _prem.empty:
+            _cols_prem = [c for c in _prem.columns if str(c).endswith(" Prêmio")]
+            if _cols_prem:
+                _premio_total = float(_prem[_cols_prem].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1).sum())
+
+        _ating_fat = (_fat / _fat_meta * 100) if _fat_meta else 0.0
+        _cards = st.columns(5)
+        _cards[0].metric("Faturamento", moeda_real(_fat), f"{percentual(_ating_fat)} da meta")
+        _cards[1].metric("Meta de faturamento", moeda_real(_fat_meta))
+        _cards[2].metric("Estoque total", moeda_real(_estoque))
+        _cards[3].metric("Ruptura", percentual(_ruptura))
+        _cards[4].metric("Prêmio conquistado", moeda_real(_premio_total))
+
+        st.markdown("### 🎯 Resultado dos KPI's")
+        if _kpis is None or _kpis.empty:
+            st.info("Ainda não existem KPI's calculados para este comprador nesta competência.")
+        else:
+            _tab = _kpis.copy()
+            if "Atingimento (%)" in _tab.columns:
+                _tab["Status"] = pd.to_numeric(_tab["Atingimento (%)"], errors="coerce").fillna(0).map(
+                    lambda v: "✅ Atingida" if v >= 100 else ("🟡 Atenção" if v >= 90 else "🔴 Crítico")
+                )
+            dataframe_br(_tab, use_container_width=True, hide_index=True, export_title=f"Meu Resumo - {_nome}")
+
+            _ating = pd.to_numeric(_tab.get("Atingimento (%)", pd.Series(dtype=float)), errors="coerce").fillna(0)
+            _c = st.columns(4)
+            _c[0].metric("KPI's avaliados", numero_inteiro(len(_tab)))
+            _c[1].metric("KPI's atingidos", numero_inteiro((_ating >= 100).sum()))
+            _c[2].metric("Em atenção", numero_inteiro(((_ating >= 90) & (_ating < 100)).sum()))
+            _c[3].metric("Críticos", numero_inteiro((_ating < 90).sum()))
+
+        st.markdown("### 📊 Indicadores operacionais")
+        _ops = pd.DataFrame([
+            {"Indicador": "Faturamento", "Resultado": moeda_real(_fat)},
+            {"Indicador": "Atingimento do faturamento", "Resultado": percentual(_ating_fat)},
+            {"Indicador": "Estoque total", "Resultado": moeda_real(_estoque)},
+            {"Indicador": "Ruptura", "Resultado": percentual(_ruptura)},
+            {"Indicador": "Reposição CMV", "Resultado": percentual(_reposicao)},
+            {"Indicador": "Prêmio conquistado", "Resultado": moeda_real(_premio_total)},
+        ])
+        dataframe_br(_ops, use_container_width=True, hide_index=True, export_title=f"Indicadores - {_nome}")
+
+    elif _perfil_resumo == "Gerente":
+        _gerente = _escopo_resumo
+        _hol_lojas = _holerite_lojas_por_meta(PERIODO_REALIZADO_USADO)
+        _hol_ger = _holerite_gerentes_por_meta(PERIODO_REALIZADO_USADO)
+
+        if not _hol_ger.empty and "Gerente Comercial" in _hol_ger.columns:
+            _hol_ger = _hol_ger.loc[
+                _hol_ger["Gerente Comercial"].map(_norm_escopo).eq(_norm_escopo(_gerente))
+            ].copy()
+        else:
+            _hol_ger = pd.DataFrame()
+
+        if not _hol_lojas.empty and "Gerente Comercial" in _hol_lojas.columns:
+            _hol_lojas = _hol_lojas.loc[
+                _hol_lojas["Gerente Comercial"].map(_norm_escopo).eq(_norm_escopo(_gerente))
+            ].copy()
+        else:
+            _hol_lojas = pd.DataFrame()
+
+        st.markdown(f"### 👔 {_gerente}")
+        st.caption("🔒 Visualização gerencial privada. Somente as lojas vinculadas ao gerente conectado participam dos cálculos.")
+
+        if _hol_ger.empty:
+            st.info("Não existem resultados vinculados a este gerente na competência selecionada.")
+        else:
+            _g = _hol_ger.iloc[0]
+            _meta_fat = float(pd.to_numeric(_g.get("Meta Faturamento (R$)", 0), errors="coerce") or 0)
+            _fat = float(pd.to_numeric(_g.get("Realizado Faturamento (R$)", 0), errors="coerce") or 0)
+            _meta_mb = float(pd.to_numeric(_g.get("Meta Margem Bruta (R$)", 0), errors="coerce") or 0)
+            _mb = float(pd.to_numeric(_g.get("Realizado Margem Bruta (R$)", 0), errors="coerce") or 0)
+            _premio = float(pd.to_numeric(_g.get("Prêmio conquistado (R$)", 0), errors="coerce") or 0)
+            _premio_max = float(pd.to_numeric(_g.get("Prêmio máximo (R$)", 0), errors="coerce") or 0)
+            _ating_fat = (_fat / _meta_fat * 100) if _meta_fat else 0.0
+            _ating_mb = (_mb / _meta_mb * 100) if _meta_mb else 0.0
+            _ating_geral = (_premio / _premio_max * 100) if _premio_max else 0.0
+            _qtd_lojas = int(_hol_lojas["Filial"].nunique()) if not _hol_lojas.empty and "Filial" in _hol_lojas.columns else int(pd.to_numeric(_g.get("Lojas", 0), errors="coerce") or 0)
+
+            _cards = st.columns(5)
+            _cards[0].metric("Lojas sob gestão", numero_inteiro(_qtd_lojas))
+            _cards[1].metric("Faturamento", moeda_real(_fat), f"{percentual(_ating_fat)} da meta")
+            _cards[2].metric("Margem bruta", moeda_real(_mb), f"{percentual(_ating_mb)} da meta")
+            _cards[3].metric("Atingimento geral", percentual(_ating_geral))
+            _cards[4].metric("Prêmio conquistado", moeda_real(_premio))
+
+            st.markdown("### 🎯 KPI's gerenciais")
+            _kpi_g = pd.DataFrame([
+                {"KPI": "Faturamento", "Meta": _meta_fat, "Realizado": _fat, "Atingimento (%)": _ating_fat},
+                {"KPI": "Margem Bruta", "Meta": _meta_mb, "Realizado": _mb, "Atingimento (%)": _ating_mb},
+            ])
+            _kpi_g["Status"] = _kpi_g["Atingimento (%)"].map(
+                lambda v: "✅ Atingida" if v >= 100 else ("🟡 Atenção" if v >= 90 else "🔴 Crítico")
+            )
+            dataframe_br(_kpi_g, use_container_width=True, hide_index=True, export_title=f"Meu Resumo Gerencial - {_gerente}")
+
+            st.markdown("### 🏬 Resultado das minhas lojas")
+            if _hol_lojas.empty:
+                st.info("Não existem lojas vinculadas com resultado disponível.")
+            else:
+                _cols = [
+                    c for c in [
+                        "Filial", "Supervisor", "Faturamento Total META", "Faturamento Total Atual",
+                        "Margem Bruta META", "Margem Bruta Atual", "Atingimento Geral (%)",
+                        "Prêmio máximo da loja", "Prêmio conquistado pelas metas", "Saldo não conquistado"
+                    ] if c in _hol_lojas.columns
+                ]
+                _lojas_view = _hol_lojas[_cols].copy()
+                dataframe_br(
+                    _lojas_view,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(430, 100 + 36 * max(len(_lojas_view), 1)),
+                    export_title=f"Minhas Lojas - {_gerente}",
+                )
+
+    elif _perfil_resumo == "Administrador":
+        st.info("Administrador: selecione abaixo o tipo de resumo individual que deseja consultar.")
+        _tipo = st.radio("Tipo de acesso", ["Comprador", "Gerente"], horizontal=True, key="resumo_admin_tipo")
+        if _tipo == "Comprador":
+            _lista = sorted(REALIZADOS["Comprador"].dropna().astype(str).unique().tolist()) if "Comprador" in REALIZADOS.columns else []
+            if not _lista:
+                st.info("Não há compradores com resultado disponível.")
+            else:
+                _sel = st.selectbox("Comprador", _lista, key="resumo_admin_comprador")
+                st.caption("Para conferir a visão exata desse usuário, acesse com o perfil do comprador. Esta seleção administrativa não altera permissões.")
+                _real = REALIZADOS[REALIZADOS["Comprador"].astype(str) == str(_sel)].copy()
+                _meta = METAS[METAS["Comprador"].astype(str) == str(_sel)].copy()
+                _kpis = _kpis_holerite_comprador(_sel)
+                if not _real.empty:
+                    _r = _real.iloc[0]
+                    _m = _meta.iloc[0] if not _meta.empty else None
+                    _fat = float(pd.to_numeric(_r.get("Faturamento Total Atual", 0), errors="coerce") or 0)
+                    _fat_meta = float(pd.to_numeric(_m.get("Faturamento Total META", 0), errors="coerce") or 0) if _m is not None else 0
+                    _c = st.columns(3)
+                    _c[0].metric("Faturamento", moeda_real(_fat))
+                    _c[1].metric("Meta", moeda_real(_fat_meta))
+                    _c[2].metric("Atingimento", percentual((_fat/_fat_meta*100) if _fat_meta else 0))
+                if _kpis is not None and not _kpis.empty:
+                    dataframe_br(_kpis, use_container_width=True, hide_index=True, export_title=f"Resumo Comprador - {_sel}")
+        else:
+            _hg = _holerite_gerentes_por_meta(PERIODO_REALIZADO_USADO)
+            _lista = sorted(_hg["Gerente Comercial"].dropna().astype(str).unique().tolist()) if not _hg.empty and "Gerente Comercial" in _hg.columns else []
+            if not _lista:
+                st.info("Não há gerentes com resultado disponível.")
+            else:
+                _sel = st.selectbox("Gerente", _lista, key="resumo_admin_gerente")
+                _g = _hg[_hg["Gerente Comercial"].astype(str) == str(_sel)].copy()
+                if not _g.empty:
+                    dataframe_br(_g, use_container_width=True, hide_index=True, export_title=f"Resumo Gerente - {_sel}")
+    else:
+        st.info("Este perfil ainda não possui um resumo executivo individual configurado.")
 
 elif visao == "Realizados":
     section("Realizados", "sec-gray")

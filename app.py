@@ -314,7 +314,7 @@ def _filtrar_objeto_por_usuario_logado(obj):
 def _menu_permitido_por_perfil():
     perfil = _perfil_logado()
     if perfil == "Comprador":
-        return ["📊 Realizados","🎯 Métricas Destaque","📈 Resultado Métricas","🏆 Prêmio Comprador","💰 Prêmio por KPI","🌟 Portal de Premiação","🧾 Holerite da Premiação"]
+        return ["📊 Realizados","🎯 Métricas Destaque","📈 Resultado Métricas","📋 Resultados dos KPI's","🏆 Prêmio Comprador","💰 Prêmio por KPI","🌟 Portal de Premiação","🧾 Holerite da Premiação"]
     if perfil == "Vendedor":
         return ["📊 Realizados","🌟 Portal de Premiação","🧾 Holerite da Premiação"]
     if perfil == "Gerente":
@@ -7575,6 +7575,7 @@ with st.sidebar:
             "📊 Realizados",
             "🎯 Métricas Destaque",
             "📈 Resultado Métricas",
+            "📋 Resultados dos KPI's",
             "🏆 Prêmio Comprador",
             "💰 Prêmio por KPI",
             "🌟 Portal de Premiação",
@@ -7599,6 +7600,7 @@ with st.sidebar:
         "📊 Realizados": "Realizados",
         "🎯 Métricas Destaque": "Métricas Destaque",
         "📈 Resultado Métricas": "Resultado Métricas",
+        "📋 Resultados dos KPI's": "Resultados dos KPI's",
         "🏆 Prêmio Comprador": "Prêmio Comprador",
         "💰 Prêmio por KPI": "Prêmio por KPI",
         "🌟 Portal de Premiação": "Portal de Premiação",
@@ -9332,6 +9334,74 @@ elif visao == "Resultado Métricas":
     section("Resultado Métricas - Realizado", "sec-blue")
     df = RESULTADO if comprador == "Todos" else RESULTADO[RESULTADO["Comprador"] == comprador]
     dataframe_br(preparar_tabela(df), use_container_width=True, hide_index=True, height=270)
+
+elif visao == "Resultados dos KPI's":
+    section("Resultados dos KPI's", "sec-blue")
+    st.caption("Visão exclusiva do resultado de cada KPI: Meta × Realizado × Atingimento × Status.")
+
+    nomes_kpi = COMPRADORES if comprador == "Todos" else [comprador]
+    partes_kpi = []
+    for nome_kpi in nomes_kpi:
+        detalhe_kpi = _kpis_holerite_comprador(nome_kpi)
+        if detalhe_kpi is None or detalhe_kpi.empty:
+            continue
+        detalhe_kpi = detalhe_kpi.copy()
+        detalhe_kpi.insert(0, "Comprador", nome_kpi)
+        partes_kpi.append(detalhe_kpi)
+
+    if not partes_kpi:
+        st.info("Ainda não existem resultados de KPI disponíveis para o filtro selecionado.")
+    else:
+        resultado_kpis = pd.concat(partes_kpi, ignore_index=True)
+        resultado_kpis["Atingimento (%)"] = pd.to_numeric(resultado_kpis["Atingimento (%)"], errors="coerce").fillna(0.0)
+        resultado_kpis["Status"] = resultado_kpis["Atingimento (%)"].map(lambda v: _status_atingimento_premiacao(v)[0])
+        resultado_kpis["Status"] = resultado_kpis.apply(
+            lambda r: ("✅ Atingida" if r["Atingimento (%)"] >= 100 else ("🟡 Atenção" if r["Atingimento (%)"] >= 90 else "🔴 Crítico")),
+            axis=1,
+        )
+
+        total_kpis = int(len(resultado_kpis))
+        qtd_atingidos = int((resultado_kpis["Atingimento (%)"] >= 100).sum())
+        qtd_atencao = int(((resultado_kpis["Atingimento (%)"] >= 90) & (resultado_kpis["Atingimento (%)"] < 100)).sum())
+        qtd_criticos = int((resultado_kpis["Atingimento (%)"] < 90).sum())
+        media_ating = float(resultado_kpis["Atingimento (%)"].mean()) if total_kpis else 0.0
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("KPI's avaliados", numero_inteiro(total_kpis))
+        c2.metric("Atingidos", numero_inteiro(qtd_atingidos))
+        c3.metric("Em atenção", numero_inteiro(qtd_atencao))
+        c4.metric("Críticos", numero_inteiro(qtd_criticos))
+        c5.metric("Atingimento médio", percentual(media_ating))
+
+        exib_kpis = resultado_kpis[["Comprador", "KPI", "Meta", "Realizado", "Atingimento (%)", "Status"]].copy()
+
+        def _fmt_valor_kpi(nome, valor):
+            nome = str(nome)
+            valor = float(pd.to_numeric(valor, errors="coerce") or 0.0)
+            if nome in {"Faturamento", "CMV", "Estoque Curva A", "Estoque Curva B", "Estoque Curva C", "Estoque Curva D", "Ruptura Ativa"}:
+                return moeda_real(valor)
+            if nome == "Reposição CMV":
+                return percentual(valor)
+            if nome == "Fator Cobertura":
+                return _numero_base(valor, 2)
+            return _numero_base(valor, 2)
+
+        exib_kpis["Meta"] = [
+            _fmt_valor_kpi(kpi, valor) for kpi, valor in zip(exib_kpis["KPI"], exib_kpis["Meta"])
+        ]
+        exib_kpis["Realizado"] = [
+            _fmt_valor_kpi(kpi, valor) for kpi, valor in zip(exib_kpis["KPI"], exib_kpis["Realizado"])
+        ]
+        exib_kpis["Atingimento (%)"] = exib_kpis["Atingimento (%)"].map(percentual)
+
+        dataframe_br(
+            exib_kpis,
+            use_container_width=True,
+            hide_index=True,
+            height=min(620, 80 + 38 * max(1, len(exib_kpis))),
+            export_title="Resultados dos KPI's",
+        )
+        st.caption("Status: ✅ Atingida = 100% ou mais | 🟡 Atenção = 90% a 99,99% | 🔴 Crítico = abaixo de 90%.")
 
 elif visao == "Prêmio Comprador":
     _render_premium_header("🏆", "Premiação por Comprador", "Resultado consolidado por comprador e por indicador, com valores oficiais e percentuais de atingimento.")

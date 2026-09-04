@@ -2759,10 +2759,21 @@ def montar_quadro_filiais_ceo(periodo):
         numeros = re.findall(r"\d+", str(valor or "").strip())
         return str(int(numeros[-1])).zfill(2) if numeros else ""
 
+    def chave_nome_loja(valor):
+        texto = _norm_escopo(valor)
+        texto = re.sub(r"\\b(loja|filial|rede|economize)\\b", " ", texto)
+        texto = re.sub(r"[^a-z0-9]+", " ", texto)
+        return " ".join(texto.split())
+
     metas_filiais["chave_filial"] = metas_filiais["regional_loja"].map(chave_numero)
+    metas_filiais["chave_nome_loja"] = metas_filiais["regional_loja"].map(chave_nome_loja)
     if realizado.empty:
         realizado = pd.DataFrame(columns=["numero_loja", "loja", "faturamento_atual", "margem_bruta_atual"])
     realizado["chave_filial"] = realizado["numero_loja"].map(chave_numero)
+
+    # Se numero_loja vier vazio/inconsistente, tenta extrair o número do próprio nome da loja.
+    faltante_numero = realizado["chave_filial"].eq("")
+    realizado.loc[faltante_numero, "chave_filial"] = realizado.loc[faltante_numero, "loja"].map(chave_numero)
 
     mapa_romano = {" I":"01", " II":"02", " III":"03", " IV":"04", " V":"05", " VI":"06", " VII":"07", " VIII":"08", " IX":"09", " X":"10"}
     for indice in realizado[realizado["chave_filial"].eq("")].index:
@@ -2772,8 +2783,27 @@ def montar_quadro_filiais_ceo(periodo):
                 realizado.at[indice, "chave_filial"] = numero
                 break
 
-    realizado = realizado[["chave_filial", "loja", "faturamento_atual", "margem_bruta_atual"]].copy()
-    quadro = metas_filiais.merge(realizado, on="chave_filial", how="left")
+    realizado["chave_nome_loja"] = realizado["loja"].map(chave_nome_loja)
+    realizado = realizado[["chave_filial", "chave_nome_loja", "loja", "faturamento_atual", "margem_bruta_atual"]].copy()
+
+    # Consolida primeiro por número de filial para evitar duplicidade.
+    por_numero = (
+        realizado[realizado["chave_filial"].ne("")]
+        .groupby("chave_filial", as_index=False)
+        .agg(loja=("loja", "first"), faturamento_atual=("faturamento_atual", "sum"), margem_bruta_atual=("margem_bruta_atual", "sum"))
+    )
+    quadro = metas_filiais.merge(por_numero, on="chave_filial", how="left")
+
+    # Fallback seguro por nome normalizado somente para lojas ainda sem realizado.
+    por_nome = (
+        realizado[realizado["chave_nome_loja"].ne("")]
+        .groupby("chave_nome_loja", as_index=False)
+        .agg(faturamento_nome=("faturamento_atual", "sum"), margem_nome=("margem_bruta_atual", "sum"))
+    )
+    quadro = quadro.merge(por_nome, on="chave_nome_loja", how="left")
+    sem_realizado = pd.to_numeric(quadro.get("faturamento_atual"), errors="coerce").isna()
+    quadro.loc[sem_realizado, "faturamento_atual"] = quadro.loc[sem_realizado, "faturamento_nome"]
+    quadro.loc[sem_realizado, "margem_bruta_atual"] = quadro.loc[sem_realizado, "margem_nome"]
     for coluna in ["meta_mes", "meta_margem_bruta_valor", "meta_margem_bruta_pct", "faturamento_atual", "margem_bruta_atual"]:
         quadro[coluna] = pd.to_numeric(quadro.get(coluna, 0), errors="coerce").fillna(0.0)
 
@@ -9524,9 +9554,27 @@ elif visao == "Meu Resumo":
             dataframe_br(_kpi_g, use_container_width=True, hide_index=True, export_title=f"Meu Resumo Gerencial - {_gerente}")
 
             st.markdown("### 🏬 Resultado das minhas lojas")
+            st.caption(
+                f"Dados calculados exclusivamente pelas lojas vinculadas a {_gerente} • "
+                f"Competência realizada: {PERIODO_REALIZADO_USADO}"
+            )
             if _hol_lojas.empty:
                 st.info("Não existem lojas vinculadas com resultado disponível.")
             else:
+                _fat_lojas = pd.to_numeric(_hol_lojas.get("Faturamento Total Atual", 0), errors="coerce").fillna(0).sum()
+                _meta_lojas = pd.to_numeric(_hol_lojas.get("Faturamento Total META", 0), errors="coerce").fillna(0).sum()
+                _mb_lojas = pd.to_numeric(_hol_lojas.get("Margem Bruta Atual", 0), errors="coerce").fillna(0).sum()
+                _meta_mb_lojas = pd.to_numeric(_hol_lojas.get("Margem Bruta META", 0), errors="coerce").fillna(0).sum()
+                _rc = st.columns(4)
+                _rc[0].metric("Realizado das lojas", moeda_real(_fat_lojas))
+                _rc[1].metric("Meta das lojas", moeda_real(_meta_lojas))
+                _rc[2].metric("Margem bruta das lojas", moeda_real(_mb_lojas))
+                _rc[3].metric("Meta margem bruta", moeda_real(_meta_mb_lojas))
+                if _fat_lojas == 0 and _meta_lojas > 0:
+                    st.warning(
+                        "As lojas deste gerente possuem meta, mas o realizado veio zerado. "
+                        "A V9 tenta localizar o realizado por número da filial e, como fallback, pelo nome normalizado da loja."
+                    )
                 _cols = [
                     c for c in [
                         "Filial", "Supervisor", "Faturamento Total META", "Faturamento Total Atual",
